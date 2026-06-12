@@ -6,10 +6,10 @@
 <title>Shipham Biodiversity Map</title>
 <meta name="description" content="A community map of biodiversity and conservation projects in and around Shipham parish, Somerset." />
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.min.css" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -50,7 +50,7 @@
   .layer:hover{background:var(--stone)}
   .layer input{margin:3px 0 0;width:17px;height:17px;accent-color:var(--moss);flex:0 0 auto;cursor:pointer}
   .swatch{width:14px;height:14px;border-radius:4px;margin-top:2px;flex:0 0 auto;border:1px solid rgba(0,0,0,.12)}
-  .swatch.line{border-radius:2px;height:0;border:0;border-top:3px dashed var(--ink);width:15px;margin-top:8px}
+  .swatch.line{border-radius:2px;height:0;border:0;border-top:3px dashed var(--heather);width:15px;margin-top:8px}
   .layer__txt{flex:1;min-width:0}
   .layer__txt b{display:block;font-size:.85rem;font-weight:600;line-height:1.15}
   .layer__txt small{display:block;color:var(--muted);font-size:.72rem;margin-top:1px}
@@ -134,7 +134,7 @@
   @keyframes sp{to{transform:rotate(360deg)}}
 
   .place-label{background:transparent;border:none;box-shadow:none;color:#fff;font-weight:700;font-size:.78rem;
-    text-shadow:0 1px 3px rgba(0,0,0,.85),0 0 2px rgba(0,0,0,.7);padding:0}
+    text-shadow:0 1px 3px rgba(0,0,0,.9),0 0 2px rgba(0,0,0,.8);padding:0}
   .place-label::before{display:none}
 
   .toast{position:absolute;left:50%;bottom:84px;transform:translateX(-50%) translateY(10px);z-index:2000;
@@ -142,6 +142,9 @@
     pointer-events:none;transition:all .25s ease;box-shadow:var(--shadow);max-width:84vw;text-align:center}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .leaflet-control-attribution{font-size:10px}
+
+  .loadfail{padding:28px;font-family:Inter,system-ui,sans-serif;color:#1E2A23;max-width:430px;margin:60px auto;text-align:center}
+  .loadfail h2{font-family:Fraunces,serif}
 
   @media (max-width:560px){
     .brand{max-width:62vw;padding:10px 13px}
@@ -235,47 +238,51 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-
 <script>
+/* ===== The whole app lives in initApp(), which only runs AFTER the map
+   libraries have finished loading (see the bootstrap at the very bottom).
+   That ordering is what prevents the "L is not defined" error. ===== */
+function initApp(){
+
 /* =================================================================
    CONFIG — the only part you may need to edit. See README.md.
 ================================================================= */
 const SUPABASE_URL      = "YOUR_SUPABASE_URL";       // shared saving of projects (free)
 const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";  // the public "anon" key
-const OS_API_KEY        = "YOUR_OS_KEY";             // free OS Data Hub key → real OS maps
+const OS_API_KEY        = "2dSIGJBjO8WVJuFxhgWj1tvnAQhCXDy8";  // free OS Data Hub key → real OS maps
+const MAPTILER_KEY      = "V6mUPHc6MgzfhbknA10X";    // optional: sharper satellite imagery
 
 const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
 /* ================================================================= */
 
-const sbReady = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.includes("YOUR_");
+const sbReady = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.includes("YOUR_") && typeof window.supabase!=="undefined";
 const sb = sbReady ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 const osReady = OS_API_KEY && !OS_API_KEY.includes("YOUR_");
+const mtReady = MAPTILER_KEY && !MAPTILER_KEY.includes("YOUR_");
 
 /* ---------- Map ---------- */
 const map = L.map("map", { zoomControl:false, maxZoom:20 }).setView([SHIPHAM.lat, SHIPHAM.lng], SHIPHAM.zoom);
 L.control.zoom({ position:"bottomleft" }).addTo(map);
 
-/* Base layers */
-const esriSat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-  { maxZoom:20, maxNativeZoom:19, attribution:"Imagery &copy; Esri" });
+/* Satellite — MapTiler if a key is supplied (sharper), else keyless Esri */
+const satLayer = mtReady
+  ? L.tileLayer(`https://api.maptiler.com/maps/satellite/256/{z}/{x}/{y}.jpg?key=${MAPTILER_KEY}`,
+      { maxZoom:20, attribution:"Imagery &copy; MapTiler, Esri" })
+  : L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom:20, maxNativeZoom:19, attribution:"Imagery &copy; Esri" });
 const osOutdoor = osReady ? L.tileLayer(`https://api.os.uk/maps/raster/v1/zxy/Outdoor_3857/{z}/{x}/{y}.png?key=${OS_API_KEY}`,
-  { maxZoom:20, attribution:"Contains OS data &copy; Crown copyright &amp; database right" }) : null;
+      { maxZoom:20, attribution:"Contains OS data &copy; Crown copyright &amp; database right" }) : null;
 const labels = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png",
-  { subdomains:"abcd", maxZoom:20, attribution:"&copy; OpenStreetMap &copy; CARTO" });
+      { subdomains:"abcd", maxZoom:20, attribution:"&copy; OpenStreetMap &copy; CARTO" });
 
 let currentBase = [];
 function setBase(mode){
   currentBase.forEach(l=>map.removeLayer(l)); currentBase=[];
+  const add=l=>{ l.addTo(map); currentBase.push(l); };
   if(mode==="os" && osOutdoor){ osOutdoor.setOpacity(1); add(osOutdoor); }
-  else if(mode==="sat"){ add(esriSat); }
-  else { /* satos (default) */ add(esriSat);
-    if(osOutdoor){ osOutdoor.setOpacity(.55); add(osOutdoor); } else { add(labels); } }
+  else if(mode==="sat"){ add(satLayer); }
+  else { add(satLayer); if(osOutdoor){ osOutdoor.setOpacity(.55); add(osOutdoor); } else add(labels); }
   ["satos","os","sat"].forEach(m=>document.getElementById("bm-"+m).classList.toggle("active", m===mode));
-  function add(l){ l.addTo(map); currentBase.push(l); }
 }
 document.getElementById("bm-satos").onclick=()=>setBase("satos");
 document.getElementById("bm-os").onclick=()=>{ if(!osOutdoor) toast("Add a free OS key (see README) to switch on OS maps."); setBase(osOutdoor?"os":"satos"); };
@@ -308,7 +315,7 @@ const idOf = f => f.id ?? f.properties?.OBJECTID ?? f.properties?.objectid ?? JS
 function pickName(p){ for(const k in p){ if(/(sssi|lnr).*name|^name$|^par\d*nm$/i.test(k) && p[k]) return p[k]; }
   for(const k of ["SSSI_NAME","LNR_NAME","NAME","Name","name"]) if(p[k]) return p[k]; return "Unnamed site"; }
 
-/* ---------- Popups: designations (with photo + info via Wikipedia) ---------- */
+/* ---------- Designation popups (photo + info via Wikipedia) ---------- */
 function bindDesignation(f,l,kind,colour){
   const name=pickName(f.properties||{});
   l._designation={kind,name,colour};
@@ -319,7 +326,7 @@ function bindDesignation(f,l,kind,colour){
 async function enrichDesignation(popup, d){
   const base=d.name.replace(/\s*\(?\s*sssi\s*\)?\s*$/i,"").replace(/\s*local nature reserve$/i,"").trim();
   let wiki=null;
-  for(const t of [base, d.name, base+(d.kind==="SSSI"?"":"")]){
+  for(const t of [base, d.name]){
     try{ const r=await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/"+encodeURIComponent(t));
       if(r.ok){ const j=await r.json(); if(j && j.extract && j.type!=="disambiguation"){ wiki=j; break; } } }catch(e){}
   }
@@ -332,10 +339,8 @@ async function enrichDesignation(popup, d){
            : `<a class="link" href="https://www.google.com/search?q=${encodeURIComponent(d.name+" "+d.kind)}" target="_blank" rel="noopener">Search for more →</a>`;
   popup.setContent(h+"</div>");
 }
-map.on("popupopen", e=>{
-  const s=e.popup._source;
-  if(s && s._designation && !s._enriched){ s._enriched=true; enrichDesignation(e.popup, s._designation); }
-});
+map.on("popupopen", e=>{ const s=e.popup._source;
+  if(s && s._designation && !s._enriched){ s._enriched=true; enrichDesignation(e.popup, s._designation); } });
 
 function projectPopup(p){
   const photos=(p.photos||[]).map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt=""></a>`).join("");
@@ -367,20 +372,14 @@ async function queryNE(cfg, bounds){
   return null;
 }
 
-/* ---------- Cached, non-destructive loading ----------
-   We never clear layers on pan/zoom — we only ADD features we don't
-   already have, and we only fetch when the view leaves what we've loaded.
-   This keeps popups open and stops the constant reloading.            */
+/* ---------- Cached, non-destructive loading (keeps popups open) ---------- */
 const seen = { sssi:new Set(), lnr:new Set(), inat:new Set() };
-let loadedArea = null;   // LatLngBounds already covered
-
+let loadedArea = null;
 function mergeFeatures(layer, set, geojson, countId){
-  let added=0;
   (geojson.features||[]).forEach(f=>{ const id=idOf(f);
-    if(!set.has(id)){ set.add(id); layer.addData(f); added++; } });
-  setCount(countId, set.size); return added;
+    if(!set.has(id)){ set.add(id); layer.addData(f); } });
+  setCount(countId, set.size);
 }
-
 async function loadDesignations(b){
   const [s,l] = await Promise.all([queryNE(NE.sssi,b), queryNE(NE.lnr,b)]);
   if(s) mergeFeatures(sssiLayer, seen.sssi, s, "c-sssi");
@@ -408,51 +407,55 @@ async function loadINat(b){
     setCount("c-inat", seen.inat.size);
   }catch(e){ console.warn("iNaturalist load failed", e); }
 }
-
 let loading=false;
 async function loadArea(force){
   if(loading) return;
   const view=map.getBounds();
-  if(!force && loadedArea && loadedArea.contains(view)) return;   // already covered → no fetch
-  if(map.getZoom() < 11){ return; }
+  if(!force && loadedArea && loadedArea.contains(view)) return;
+  if(map.getZoom() < 11) return;
   loading=true;
-  const fetchB = view.pad(0.5);                                   // grab a generous margin
-  ["c-sssi","c-lnr","c-inat"].forEach(id=>{ const el=document.getElementById(id);
-    if(el && !el.textContent) el.textContent="· …"; });
+  const fetchB=view.pad(0.5);
+  ["c-sssi","c-lnr","c-inat"].forEach(id=>{ const el=document.getElementById(id); if(el && !el.textContent) el.textContent="· …"; });
   await Promise.all([ loadDesignations(fetchB), loadINat(fetchB) ]);
-  loadedArea = loadedArea ? loadedArea.extend(fetchB) : fetchB;   // remember coverage
+  loadedArea = loadedArea ? loadedArea.extend(fetchB) : fetchB;
   loading=false;
 }
 let t=null;
 map.on("moveend", ()=>{ clearTimeout(t); t=setTimeout(()=>loadArea(false), 400); });
 
-/* ---------- Parish boundary + settlement labels ---------- */
-const ONS = "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/Parishes_and_Non_Civil_Parished_Areas_December_2023_Boundaries_EW_BGC/FeatureServer/0";
-async function loadParish(){
-  let gj=null;
-  try{ // by name first
-    const r=await fetch(`${ONS}/query?where=${encodeURIComponent("PAR23NM='Shipham'")}&outFields=*&outSR=4326&returnGeometry=true&f=geojson`);
-    if(r.ok){ const j=await r.json(); if(j.features?.length) gj=j; }
-  }catch(e){}
-  if(!gj){ try{ // fallback: spatial, then filter to Shipham
-    const b=L.latLngBounds([SHIPHAM.lat-0.03,SHIPHAM.lng-0.05],[SHIPHAM.lat+0.03,SHIPHAM.lng+0.05]);
-    const r=await fetch(`${ONS}/query?where=1%3D1&geometry=${bboxQS(b)}&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326&returnGeometry=true&f=geojson`);
-    if(r.ok){ const j=await r.json();
-      const feats=(j.features||[]).filter(f=>Object.values(f.properties||{}).some(v=>String(v).toLowerCase()==="shipham"));
-      if(feats.length) gj={type:"FeatureCollection",features:feats}; }
-  }catch(e){} }
-  if(gj){
-    L.geoJSON(gj, { style:()=>({color:"#1E2A23",weight:2.5,dashArray:"6 5",fill:true,fillColor:"#1E2A23",fillOpacity:.04}) })
-      .bindTooltip("Shipham civil parish (Shipham, Rowberrow & Star)", {sticky:true})
-      .addTo(parishGroup);
+/* ---------- Parish boundary (robust + clearly visible) ---------- */
+const PARISH_SERVICES = [
+ "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/Parishes_and_Non_Civil_Parished_Areas_December_2024_Boundaries_EW_BGC/FeatureServer/0",
+ "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/Parishes_and_Non_Civil_Parished_Areas_December_2023_Boundaries_EW_BGC/FeatureServer/0",
+ "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/Parishes_May_2024_Boundaries_EW_BGC/FeatureServer/0",
+ "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/PARNCP_DEC_2025_EW_BSC/FeatureServer/0"
+];
+async function fetchParish(){
+  const b=L.latLngBounds([SHIPHAM.lat-0.02,SHIPHAM.lng-0.04],[SHIPHAM.lat+0.02,SHIPHAM.lng+0.04]);
+  const qs=`/query?where=1%3D1&geometry=${bboxQS(b)}&geometryType=esriGeometryEnvelope&inSR=4326`
+    +`&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326&returnGeometry=true&f=geojson`;
+  for(const svc of PARISH_SERVICES){
+    try{ const r=await fetch(svc+qs); if(!r.ok) continue; const j=await r.json();
+      const feats=(j.features||[]).filter(f=>Object.values(f.properties||{}).some(v=>String(v).trim().toLowerCase()==="shipham"));
+      if(feats.length) return {type:"FeatureCollection",features:feats};
+    }catch(e){}
   }
-  // Labelled settlement markers (parish is one boundary; these mark all three places)
-  const places=[
-    {n:"Shipham",   lat:51.3138, lng:-2.7987},
-    {n:"Rowberrow", lat:51.3203, lng:-2.7925},
-    {n:"Star",      lat:51.3247, lng:-2.8205}
-  ];
-  places.forEach(p=>{
+  return null;
+}
+async function loadParish(){
+  const gj=await fetchParish();
+  if(gj){
+    L.geoJSON(gj,{style:{color:"#ffffff",weight:6,opacity:.85,fill:false}}).addTo(parishGroup); // white halo
+    const line=L.geoJSON(gj,{style:{color:"#8E4A77",weight:3,opacity:1,dashArray:"9 6",fill:false}})
+      .bindTooltip("Shipham civil parish (Shipham, Rowberrow & Star)",{sticky:true});
+    line.addTo(parishGroup);
+    try{ map.fitBounds(line.getBounds(),{padding:[40,40],maxZoom:15}); }catch(e){}
+  } else {
+    toast("Couldn't load the parish boundary just now — try refreshing.");
+  }
+  [ {n:"Shipham",lat:51.3138,lng:-2.7987},
+    {n:"Rowberrow",lat:51.3203,lng:-2.7925},
+    {n:"Star",lat:51.3247,lng:-2.8205} ].forEach(p=>{
     L.circleMarker([p.lat,p.lng],{radius:5,color:"#fff",weight:2,fillColor:"#1E2A23",fillOpacity:1})
       .bindTooltip(p.n,{permanent:true,direction:"right",className:"place-label",offset:[8,0]})
       .addTo(parishGroup);
@@ -560,6 +563,46 @@ drawer.addEventListener("submit", async e=>{
 loadArea(true);
 loadParish();
 loadProjects();
+
+} /* ===== end initApp ===== */
+
+/* ================= BOOTSTRAP: load map libraries with CDN fallbacks ================= */
+function loadScript(urls){
+  return new Promise((resolve,reject)=>{ let i=0;
+    (function next(){ if(i>=urls.length){ reject(new Error("Failed to load "+urls[0])); return; }
+      const s=document.createElement("script"); s.src=urls[i++];
+      s.onload=resolve; s.onerror=()=>{ s.remove(); next(); }; document.head.appendChild(s);
+    })();
+  });
+}
+(async()=>{
+  try{
+    await loadScript([
+      "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js",
+      "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
+      "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"]);
+    await Promise.all([
+      loadScript([
+        "https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js",
+        "https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js",
+        "https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.js"]),
+      loadScript([
+        "https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js",
+        "https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js",
+        "https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"])
+    ]);
+    try{ await loadScript([
+      "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js",
+      "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"]); }
+    catch(e){ console.warn("Supabase library unavailable; shared saving disabled.", e); }
+    initApp();
+  }catch(err){
+    console.error(err);
+    document.getElementById("map").innerHTML =
+      '<div class="loadfail"><h2>Map couldn\'t load</h2><p style="color:#5B6A60">The mapping libraries didn\'t download. '
+      +'Check your internet connection and refresh the page.</p></div>';
+  }
+})();
 </script>
 </body>
 </html>
