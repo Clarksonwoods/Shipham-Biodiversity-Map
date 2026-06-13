@@ -270,6 +270,7 @@ const SUPABASE_URL      = "YOUR_SUPABASE_URL";       // shared saving of project
 const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";  // the public "anon" key
 const OS_API_KEY        = "2dSIGJBjO8WVJuFxhgWj1tvnAQhCXDy8";  // free OS Data Hub key → real OS maps
 const MAPTILER_KEY      = "V6mUPHc6MgzfhbknA10X";    // optional: sharper satellite imagery
+const APPS_SCRIPT_URL   = "https://script.google.com/macros/s/AKfycbzyBmfJVVTEjpoS68ioa_TQDgC3RtBnchsPq7vjPt1yTZUHK9rNB46wc3aQaQUhX1li9g/exec"; // Google Drive/Sheets backend
 
 const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
 
@@ -289,7 +290,7 @@ const CONTEXT_LAYERS = [
     sources:[ {item:"f8488c24a34f4456a69abd894a2ba180"} ] },
   { key:"prow", label:"Public rights of way", sub:"footpaths, bridleways & byways",
     style:{color:"#FF6D00",weight:2.5,opacity:.95,fill:false},
-    sources:[ /* {url:"PASTE your Somerset Public Rights of Way FeatureServer/0 URL here"} */ ] },
+    sources:[ {geojson:"shipham-prow.geojson"} ] },
   { key:"inspire", label:"Land Registry (INSPIRE)", sub:"property extents",
     style:{color:"#C0651E",weight:0.7,fill:false},
     sources:[ /* {url:"PASTE your INSPIRE Index Polygons FeatureServer/0 URL here"} */ ] }
@@ -298,6 +299,8 @@ const CONTEXT_LAYERS = [
 
 const sbReady = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.includes("YOUR_") && typeof window.supabase!=="undefined";
 const sb = sbReady ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+const gasReady = /^https:\/\/script\.google\.com\/.+\/exec$/.test(APPS_SCRIPT_URL);
+const backendReady = gasReady || sbReady;
 const osReady = OS_API_KEY && !OS_API_KEY.includes("YOUR_");
 const mtReady = MAPTILER_KEY && !MAPTILER_KEY.includes("YOUR_");
 
@@ -574,8 +577,13 @@ async function loadParish(){
 const sessionProjects=[];
 async function loadProjects(){
   projLayer.clearLayers(); let rows=[];
-  if(sbReady){ const {data,error}=await sb.from("projects").select("*").order("created_at",{ascending:false});
-    if(error) console.warn(error); else rows=data||[]; } else rows=sessionProjects;
+  if(gasReady){
+    try{ const r=await fetch(APPS_SCRIPT_URL); const j=await r.json(); if(j && j.ok) rows=j.projects||[]; }
+    catch(e){ console.warn("Couldn't load projects from Google backend", e); }
+  } else if(sbReady){
+    const {data,error}=await sb.from("projects").select("*").order("created_at",{ascending:false});
+    if(error) console.warn(error); else rows=data||[];
+  } else rows=sessionProjects;
   rows.forEach(p=>{ if(!p.geom) return;
     projLayer.addData({type:"Feature",geometry:p.geom,
       properties:{name:p.name,description:p.description,contributor:p.contributor,photos:p.photos||[]}}); });
@@ -597,7 +605,7 @@ function toast(m){ toastEl.textContent=m; toastEl.classList.add("show");
 /* ================= ADD-A-PROJECT ================= */
 const drawer=document.getElementById("drawer"), scrim=document.getElementById("scrim");
 let drawHandler=null, tempLayer=null, photoFiles=[];
-document.getElementById("storageNote").innerHTML = sbReady
+document.getElementById("storageNote").innerHTML = backendReady
   ? "Your project will appear on the map for everyone, right away."
   : "<b>Preview mode.</b> This map isn't connected to shared storage yet, so projects you add show only in your browser until you refresh. See README.md to switch on shared saving (free).";
 
@@ -638,6 +646,7 @@ function resizeImage(file,max=1600,q=.82){ return new Promise(res=>{ const img=n
   img.onload=()=>{ let {width:w,height:h}=img; if(w>max||h>max){ const s=Math.min(max/w,max/h); w=Math.round(w*s); h=Math.round(h*s); }
     const c=document.createElement("canvas"); c.width=w; c.height=h; c.getContext("2d").drawImage(img,0,0,w,h);
     c.toBlob(b=>res(b||file),"image/jpeg",q); }; img.onerror=()=>res(file); img.src=URL.createObjectURL(file); }); }
+const blobToDataURL = b => new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(b); });
 
 drawer.addEventListener("submit", async e=>{
   e.preventDefault();
@@ -650,7 +659,15 @@ drawer.addEventListener("submit", async e=>{
   const geom=tempLayer.toGeoJSON().geometry;
   try{
     let urls=[];
-    if(sbReady){
+    if(gasReady){
+      const photos=[];
+      for(const f of photoFiles){ photos.push(await blobToDataURL(await resizeImage(f))); }
+      // text/plain body keeps it a "simple" request (no CORS preflight to Apps Script)
+      const r=await fetch(APPS_SCRIPT_URL,{ method:"POST", body:JSON.stringify({ name, description:desc, contributor:by||null, geom, photos }) });
+      const j=await r.json().catch(()=>({ok:true}));
+      if(j && j.ok===false) throw new Error(j.error||"save failed");
+      toast("Thank you — your project is now on the map.");
+    } else if(sbReady){
       for(let i=0;i<photoFiles.length;i++){ const blob=await resizeImage(photoFiles[i]);
         const path=`${Date.now()}-${i}-${Math.random().toString(36).slice(2,7)}.jpg`;
         const {error:upErr}=await sb.storage.from("project-photos").upload(path,blob,{contentType:"image/jpeg"});
@@ -691,7 +708,7 @@ function contextPopup(cfg, p){
 async function loadContext(cfg){
   if(cfg._loaded || cfg._loading) return; cfg._loading=true;
   const el=document.getElementById("c-"+cfg.key); if(el) el.textContent="· …";
-  if(!cfg.sources || !cfg.sources.some(s=>s.item||(s.url&&!/PASTE/i.test(s.url)))){
+  if(!cfg.sources || !cfg.sources.some(s=>s.item||(s.url&&!/PASTE/i.test(s.url))||s.geojson)){
     cfg._loaded=true; cfg._loading=false; if(el) el.textContent="";
     toast(`${cfg.label}: add its service URL in the config (see README).`); return;
   }
@@ -701,7 +718,12 @@ async function loadContext(cfg){
     +`&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326&returnGeometry=true&resultRecordCount=4000&f=geojson`;
   let any=false;
   for(const src of cfg.sources){
-    try{ const base=await sourceBase(src); if(!base) continue;
+    try{
+      if(src.geojson){
+        const r=await fetch(src.geojson); if(!r.ok) continue; const j=await r.json();
+        (j.features||[]).forEach(f=>{ const c=clipToParish(f); if(c) cfg.layer.addData(c); }); any=true; continue;
+      }
+      const base=await sourceBase(src); if(!base) continue;
       const r=await fetch(base+qs); if(!r.ok) continue; const j=await r.json();
       (j.features||[]).forEach(f=>{ const c=clipToParish(f); if(c) cfg.layer.addData(c); }); any=true;
     }catch(e){ console.warn("Context layer source failed:", cfg.key, e); }
