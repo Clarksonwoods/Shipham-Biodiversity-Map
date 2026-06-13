@@ -186,6 +186,25 @@
       <span class="swatch" style="background:var(--heather)"></span>
       <span class="layer__txt"><b>Community projects</b><small>Added by people like you <span class="count" id="c-proj"></span></small></span></label>
 
+    <div style="border-top:1px solid var(--line);margin:6px 8px 0;padding:7px 0 1px">
+      <small style="display:block;font-size:.66rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-left:8px">Context layers</small>
+    </div>
+    <label class="layer"><input type="checkbox" id="lyr-habitats">
+      <span class="swatch" style="background:#5E9E72"></span>
+      <span class="layer__txt"><b>Priority habitats</b><small>Natural England <span class="count" id="c-habitats"></span></small></span></label>
+    <label class="layer"><input type="checkbox" id="lyr-woodland">
+      <span class="swatch" style="background:#2E6E4E"></span>
+      <span class="layer__txt"><b>Woodland &amp; trees</b><small>Forestry Commission <span class="count" id="c-woodland"></span></small></span></label>
+    <label class="layer"><input type="checkbox" id="lyr-flood">
+      <span class="swatch" style="background:#5DA8E0"></span>
+      <span class="layer__txt"><b>Flood risk</b><small>Environment Agency <span class="count" id="c-flood"></span></small></span></label>
+    <label class="layer"><input type="checkbox" id="lyr-prow">
+      <span class="swatch" style="background:#FF6D00;height:4px;margin-top:7px;border-radius:2px"></span>
+      <span class="layer__txt"><b>Public rights of way</b><small>footpaths &amp; bridleways <span class="count" id="c-prow"></span></small></span></label>
+    <label class="layer"><input type="checkbox" id="lyr-inspire">
+      <span class="swatch" style="background:#C0651E"></span>
+      <span class="layer__txt"><b>Land Registry (INSPIRE)</b><small>property extents <span class="count" id="c-inspire"></span></small></span></label>
+
     <div class="basemap">
       <small>Base map</small>
       <div class="row">
@@ -253,6 +272,28 @@ const OS_API_KEY        = "2dSIGJBjO8WVJuFxhgWj1tvnAQhCXDy8";  // free OS Data H
 const MAPTILER_KEY      = "V6mUPHc6MgzfhbknA10X";    // optional: sharper satellite imagery
 
 const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
+
+/* Context layers (all OFF by default). Each pulls from an official open-data
+   service. Two of them have a paste-in slot — copy the layer's service URL from
+   your ArcGIS map (…/FeatureServer/0) into the {url:"…"} blanks below.        */
+const CONTEXT_LAYERS = [
+  { key:"habitats", label:"Priority habitats", sub:"Natural England",
+    style:{color:"#3E7D52",weight:1,fillColor:"#5E9E72",fillOpacity:.38},
+    sources:[ {item:"39403df11c8044d998772db5b54ad86c"} ] },
+  { key:"woodland", label:"Woodland & trees", sub:"NFI woodland + trees outside woodland",
+    style:{color:"#235A3F",weight:0.5,fillColor:"#2E6E4E",fillOpacity:.5},
+    sources:[ {item:"0682c7cb180e4abe9dee7e4d5cc35784"}
+              /* , {url:"PASTE Trees-Outside-Woodland FeatureServer/0 URL here"} */ ] },
+  { key:"flood", label:"Flood risk (rivers & sea)", sub:"Environment Agency",
+    style:{color:"#2E78B5",weight:0.5,fillColor:"#5DA8E0",fillOpacity:.45},
+    sources:[ {item:"f8488c24a34f4456a69abd894a2ba180"} ] },
+  { key:"prow", label:"Public rights of way", sub:"footpaths, bridleways & byways",
+    style:{color:"#FF6D00",weight:2.5,opacity:.95,fill:false},
+    sources:[ /* {url:"PASTE your Somerset Public Rights of Way FeatureServer/0 URL here"} */ ] },
+  { key:"inspire", label:"Land Registry (INSPIRE)", sub:"property extents",
+    style:{color:"#C0651E",weight:0.7,fill:false},
+    sources:[ /* {url:"PASTE your INSPIRE Index Polygons FeatureServer/0 URL here"} */ ] }
+];
 /* ================================================================= */
 
 const sbReady = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.includes("YOUR_") && typeof window.supabase!=="undefined";
@@ -295,6 +336,7 @@ const sssiLayer = L.geoJSON(null, { style:()=>({color:"#2F5D3A",weight:2,fillCol
 const lnrLayer  = L.geoJSON(null, { style:()=>({color:"#3E7CA8",weight:2,fillColor:"#3E7CA8",fillOpacity:.16}),
   onEachFeature:(f,l)=>bindDesignation(f,l,"Local Nature Reserve","#3E7CA8") }).addTo(map);
 const inatCluster = L.markerClusterGroup({ maxClusterRadius:45, showCoverageOnHover:false }).addTo(map);
+let inatTiles = null;   // fallback tile layer, used only if the live API can't be reached
 const projLayer = L.geoJSON(null, { style:()=>({color:"#8E4A77",weight:2.5,fillColor:"#8E4A77",fillOpacity:.22}),
   onEachFeature:(f,l)=>l.bindPopup(projectPopup(f.properties)) }).addTo(map);
 const parishGroup = L.layerGroup().addTo(map);
@@ -302,7 +344,9 @@ const parishGroup = L.layerGroup().addTo(map);
 bindToggle("lyr-parish", parishGroup);
 bindToggle("lyr-sssi", sssiLayer);
 bindToggle("lyr-lnr", lnrLayer);
-bindToggle("lyr-inat", inatCluster);
+document.getElementById("lyr-inat").addEventListener("change", e=>{
+  [inatCluster, inatTiles].forEach(l=>{ if(l){ e.target.checked ? map.addLayer(l) : map.removeLayer(l); } });
+});
 bindToggle("lyr-proj", projLayer);
 function bindToggle(id, layer){ document.getElementById(id).addEventListener("change", e=>{
   e.target.checked ? map.addLayer(layer) : map.removeLayer(layer); }); }
@@ -375,9 +419,50 @@ async function queryNE(cfg, bounds){
 /* ---------- Cached, non-destructive loading (keeps popups open) ---------- */
 const seen = { sssi:new Set(), lnr:new Set(), inat:new Set() };
 let loadedArea = null;
+let parishBuffer = null;   // 500 m buffer around the parish; everything is trimmed to it
+let _bufPolys = null;
+function bufferPolys(){
+  if(_bufPolys) return _bufPolys;
+  try{ _bufPolys = turf.flatten(parishBuffer).features; }catch(e){ _bufPolys=[parishBuffer]; }
+  return _bufPolys;
+}
+function turfIntersect(a,b){
+  try{ return turf.intersect(turf.featureCollection([a,b])); }
+  catch(e){ try{ return turf.intersect(a,b); }catch(e2){ return null; } }
+}
+function nearParishPoint(lng,lat){
+  if(!parishBuffer || typeof turf==="undefined") return true;
+  try{ return turf.booleanPointInPolygon([lng,lat], parishBuffer); }catch(e){ return true; }
+}
+/* Trim a feature's geometry to within 500 m of the parish. Returns a clipped
+   feature, or null if it falls entirely outside. */
+function clipToParish(f){
+  if(!parishBuffer || typeof turf==="undefined") return f;
+  const t=f.geometry && f.geometry.type;
+  try{
+    if(t==="Polygon"||t==="MultiPolygon"){
+      const c=turfIntersect(f, parishBuffer); if(!c) return null;
+      c.properties=f.properties; return c;
+    }
+    if(t==="LineString"||t==="MultiLineString"){
+      const kept=[];
+      for(const poly of bufferPolys()){
+        let segs; try{ segs=turf.lineSplit(f, poly).features; }catch(_){ segs=[f]; }
+        for(const seg of segs){ const cs=seg.geometry.coordinates;
+          if(turf.booleanPointInPolygon(cs[Math.floor(cs.length/2)], poly)) kept.push(cs); }
+      }
+      if(!kept.length) return null;
+      return {type:"Feature", properties:f.properties, geometry:{type:"MultiLineString", coordinates:kept}};
+    }
+    if(t==="Point") return turf.booleanPointInPolygon(f.geometry.coordinates, parishBuffer)? f : null;
+    return f;
+  }catch(e){ return f; }
+}
 function mergeFeatures(layer, set, geojson, countId){
   (geojson.features||[]).forEach(f=>{ const id=idOf(f);
-    if(!set.has(id)){ set.add(id); layer.addData(f); } });
+    if(set.has(id)) return;
+    const c=clipToParish(f); if(!c) return;        // trim to within 500 m of the parish
+    set.add(id); layer.addData(c); });
   setCount(countId, set.size);
 }
 async function loadDesignations(b){
@@ -385,27 +470,53 @@ async function loadDesignations(b){
   if(s) mergeFeatures(sssiLayer, seen.sssi, s, "c-sssi");
   if(l) mergeFeatures(lnrLayer,  seen.lnr,  l, "c-lnr");
 }
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+async function fetchWithRetry(url,{tries=2,timeout=12000}={}){
+  for(let i=0;i<=tries;i++){
+    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(), timeout);
+    try{
+      const r=await fetch(url,{signal:ctrl.signal}); clearTimeout(to);
+      if(r.ok) return await r.json();
+      if(r.status===429 && i<tries){ await sleep(1500*(i+1)); continue; }   // throttled → wait & retry
+      return null;
+    }catch(e){ clearTimeout(to); if(i<tries){ await sleep(700*(i+1)); continue; } throw e; }
+  }
+  return null;
+}
+function inatFallback(){
+  if(inatTiles) return;                                  // already showing the fallback
+  const opts={ maxZoom:20, opacity:.85, attribution:"&copy; iNaturalist" };
+  if(parishBuffer){ try{ opts.bounds=L.geoJSON(parishBuffer).getBounds(); }catch(e){} }
+  inatTiles=L.tileLayer("https://api.inaturalist.org/v1/points/{z}/{x}/{y}.png", opts);
+  if(document.getElementById("lyr-inat").checked) inatTiles.addTo(map);
+  const el=document.getElementById("c-inat"); if(el) el.textContent="· shown as layer";
+  toast("Wildlife sightings are showing as a map layer — live details couldn't load right now.");
+}
 async function loadINat(b){
   const u=`https://api.inaturalist.org/v1/observations?nelat=${b.getNorth()}&nelng=${b.getEast()}`
     +`&swlat=${b.getSouth()}&swlng=${b.getWest()}&per_page=100&order=desc&order_by=created_at`
-    +`&photos=true&geo=true&quality_grade=research,needs_id`;
-  try{
-    const r=await fetch(u); const j=await r.json();
-    (j.results||[]).forEach(o=>{
-      if(!o.geojson || seen.inat.has(o.id)) return; seen.inat.add(o.id);
-      const [lng,lat]=o.geojson.coordinates;
-      const common=o.taxon?.preferred_common_name || o.taxon?.name || "Unknown species";
-      const sci=o.taxon?.name||""; const thumb=o.photos?.[0]?.url?.replace("square","small");
-      const m=L.circleMarker([lat,lng],{radius:6,color:"#fff",weight:1.5,fillColor:"#E0A52E",fillOpacity:1});
-      m.bindPopup(`<div class="pop"><span class="tag" style="background:#E0A52E1a;color:#b9831f">Wildlife sighting</span>
-        <h3>${esc(common)}</h3>${sci?`<p class="by"><i>${esc(sci)}</i></p>`:""}
-        ${thumb?`<div class="photos"><a href="${esc(o.uri)}" target="_blank" rel="noopener"><img src="${esc(thumb)}" alt=""></a></div>`:""}
-        <p class="by">Seen ${esc(o.observed_on||"")} · ${esc(o.user?.login||"someone")}</p>
-        <a class="link" href="${esc(o.uri)}" target="_blank" rel="noopener">View on iNaturalist →</a></div>`);
-      inatCluster.addLayer(m);
-    });
-    setCount("c-inat", seen.inat.size);
-  }catch(e){ console.warn("iNaturalist load failed", e); }
+    +`&photos=true&geo=true&quality_grade=${encodeURIComponent("research,needs_id")}`;
+  let j;
+  try{ j=await fetchWithRetry(u); }
+  catch(e){ console.warn("iNaturalist unreachable — using tile fallback.", e); inatFallback(); return; }
+  if(!j){ inatFallback(); return; }
+  if(inatTiles){ map.removeLayer(inatTiles); inatTiles=null; }   // live data came back; drop fallback
+  (j.results||[]).forEach(o=>{
+    if(!o.geojson || seen.inat.has(o.id)) return;
+    const [lng,lat]=o.geojson.coordinates;
+    if(!nearParishPoint(lng,lat)) return;        // hide sightings >500 m from the parish
+    seen.inat.add(o.id);
+    const common=o.taxon?.preferred_common_name || o.taxon?.name || "Unknown species";
+    const sci=o.taxon?.name||""; const thumb=o.photos?.[0]?.url?.replace("square","small");
+    const m=L.circleMarker([lat,lng],{radius:6,color:"#fff",weight:1.5,fillColor:"#E0A52E",fillOpacity:1});
+    m.bindPopup(`<div class="pop"><span class="tag" style="background:#E0A52E1a;color:#b9831f">Wildlife sighting</span>
+      <h3>${esc(common)}</h3>${sci?`<p class="by"><i>${esc(sci)}</i></p>`:""}
+      ${thumb?`<div class="photos"><a href="${esc(o.uri)}" target="_blank" rel="noopener"><img src="${esc(thumb)}" alt=""></a></div>`:""}
+      <p class="by">Seen ${esc(o.observed_on||"")} · ${esc(o.user?.login||"someone")}</p>
+      <a class="link" href="${esc(o.uri)}" target="_blank" rel="noopener">View on iNaturalist →</a></div>`);
+    inatCluster.addLayer(m);
+  });
+  setCount("c-inat", seen.inat.size);
 }
 let loading=false;
 async function loadArea(force){
@@ -445,6 +556,10 @@ async function fetchParish(){
 async function loadParish(){
   const gj=await fetchParish();
   if(gj){
+    if(typeof turf!=="undefined"){
+      try{ parishBuffer = turf.buffer(gj.features[0], 0.5, {units:"kilometers"}); }
+      catch(e){ console.warn("Parish buffer failed; overlays won't be clipped.", e); }
+    }
     L.geoJSON(gj,{style:{color:"#ffffff",weight:6,opacity:.85,fill:false}}).addTo(parishGroup); // white halo
     const line=L.geoJSON(gj,{style:{color:"#8E4A77",weight:3,opacity:1,dashArray:"9 6",fill:false}})
       .bindTooltip("Shipham civil parish (Shipham, Rowberrow & Star)",{sticky:true});
@@ -453,13 +568,6 @@ async function loadParish(){
   } else {
     toast("Couldn't load the parish boundary just now — try refreshing.");
   }
-  [ {n:"Shipham",lat:51.3138,lng:-2.7987},
-    {n:"Rowberrow",lat:51.3203,lng:-2.7925},
-    {n:"Star",lat:51.3247,lng:-2.8205} ].forEach(p=>{
-    L.circleMarker([p.lat,p.lng],{radius:5,color:"#fff",weight:2,fillColor:"#1E2A23",fillOpacity:1})
-      .bindTooltip(p.n,{permanent:true,direction:"right",className:"place-label",offset:[8,0]})
-      .addTo(parishGroup);
-  });
 }
 
 /* ---------- Projects ---------- */
@@ -559,9 +667,62 @@ drawer.addEventListener("submit", async e=>{
   finally{ saveBtn.disabled=false; saveBtn.textContent="Save project"; }
 });
 
+/* ---------- Context layers (lazy: fetched only when switched on) ---------- */
+const itemUrlCache={};
+async function itemToQuery(item){
+  if(itemUrlCache[item]) return itemUrlCache[item];
+  const r=await fetch(`https://www.arcgis.com/sharing/rest/content/items/${item}?f=json`);
+  const j=await r.json(); let u=j.url;
+  if(!u) throw new Error("No service URL for item "+item);
+  u=u.replace(/\/$/,""); if(!/\/\d+$/.test(u)) u+="/0";
+  itemUrlCache[item]=u; return u;
+}
+async function sourceBase(src){
+  if(src.url && !/PASTE/i.test(src.url)) return src.url.replace(/\/$/,"");
+  if(src.item) return await itemToQuery(src.item);
+  return null;
+}
+function contextPopup(cfg, p){
+  const fields=["ROW_TYPE","PROW_TYPE","ROWTYPE","path_type","RIGHTOFWAY","prow_ref","PROW_REF","Path_Name","risk_band","Main_Habit","mainhabs","MAIN_HABIT","IFT_IOA","Category","CATEGORY","woodland_t","Woodland_T","INSPIREID","inspireid","INSPIRE_ID"];
+  let detail=""; for(const k of fields){ if(p[k]){ detail=p[k]; break; } }
+  return `<div class="pop"><span class="tag" style="background:${cfg._c}1a;color:${cfg._c}">${esc(cfg.label)}</span>`
+    + (detail?`<h3 style="font-size:.95rem">${esc(detail)}</h3>`:`<p class="by">${esc(cfg.sub)}</p>`) + `</div>`;
+}
+async function loadContext(cfg){
+  if(cfg._loaded || cfg._loading) return; cfg._loading=true;
+  const el=document.getElementById("c-"+cfg.key); if(el) el.textContent="· …";
+  if(!cfg.sources || !cfg.sources.some(s=>s.item||(s.url&&!/PASTE/i.test(s.url)))){
+    cfg._loaded=true; cfg._loading=false; if(el) el.textContent="";
+    toast(`${cfg.label}: add its service URL in the config (see README).`); return;
+  }
+  const bb = parishBuffer ? L.geoJSON(parishBuffer).getBounds() : map.getBounds();
+  const env=`${bb.getWest()},${bb.getSouth()},${bb.getEast()},${bb.getNorth()}`;
+  const qs=`/query?where=1%3D1&geometry=${env}&geometryType=esriGeometryEnvelope&inSR=4326`
+    +`&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326&returnGeometry=true&resultRecordCount=4000&f=geojson`;
+  let any=false;
+  for(const src of cfg.sources){
+    try{ const base=await sourceBase(src); if(!base) continue;
+      const r=await fetch(base+qs); if(!r.ok) continue; const j=await r.json();
+      (j.features||[]).forEach(f=>{ const c=clipToParish(f); if(c) cfg.layer.addData(c); }); any=true;
+    }catch(e){ console.warn("Context layer source failed:", cfg.key, e); }
+  }
+  cfg._loaded=true; cfg._loading=false;
+  if(el) el.textContent="· "+cfg.layer.getLayers().length;
+  if(!any) toast(`Couldn't load ${cfg.label} just now.`);
+}
+CONTEXT_LAYERS.forEach(cfg=>{
+  cfg._c = cfg.style.fillColor || cfg.style.color;
+  cfg.layer = L.geoJSON(null, { style:()=>cfg.style, onEachFeature:(f,l)=>l.bindPopup(contextPopup(cfg, f.properties||{})) });
+  const cb=document.getElementById("lyr-"+cfg.key);
+  if(!cb) return;
+  cb.addEventListener("change", async e=>{
+    if(e.target.checked){ map.addLayer(cfg.layer); await loadContext(cfg); }
+    else map.removeLayer(cfg.layer);
+  });
+});
+
 /* ---------- Go ---------- */
-loadArea(true);
-loadParish();
+(async()=>{ await loadParish(); loadArea(true); })();   // parish first → buffer ready → overlays clipped
 loadProjects();
 
 } /* ===== end initApp ===== */
@@ -595,6 +756,10 @@ function loadScript(urls){
       "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js",
       "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"]); }
     catch(e){ console.warn("Supabase library unavailable; shared saving disabled.", e); }
+    try{ await loadScript([
+      "https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js",
+      "https://unpkg.com/@turf/turf@7/turf.min.js"]); }
+    catch(e){ console.warn("Turf unavailable; 500 m clipping disabled.", e); }
     initApp();
   }catch(err){
     console.error(err);
