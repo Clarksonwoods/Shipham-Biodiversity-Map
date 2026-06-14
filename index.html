@@ -237,7 +237,9 @@
 </aside>
 
 <div class="hint" id="hint">
-  <span>Tap the map to trace your project area. Double-tap to finish.</span>
+  <span>Tap to add points · drag with one finger to move the map</span>
+  <button id="hintUndo">Undo</button>
+  <button id="hintFinish">Finish</button>
   <button id="hintCancel">Cancel</button>
 </div>
 
@@ -513,15 +515,19 @@ async function loadDesignations(b){
   if(l) mergeFeatures(lnrLayer,  seen.lnr,  l, "c-lnr",  designatedBuffer);
 }
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
+// Timeout without AbortController (AbortSignal can't be cloned in some sandboxes)
+function timeoutFetch(url, ms){
+  return Promise.race([ fetch(url),
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")), ms)) ]);
+}
 async function fetchWithRetry(url,{tries=2,timeout=12000}={}){
   for(let i=0;i<=tries;i++){
-    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(), timeout);
     try{
-      const r=await fetch(url,{signal:ctrl.signal}); clearTimeout(to);
+      const r=await timeoutFetch(url, timeout);
       if(r.ok) return await r.json();
       if(r.status===429 && i<tries){ await sleep(1500*(i+1)); continue; }   // throttled → wait & retry
       return null;
-    }catch(e){ clearTimeout(to); if(i<tries){ await sleep(700*(i+1)); continue; } throw e; }
+    }catch(e){ if(i<tries){ await sleep(700*(i+1)); continue; } throw e; }
   }
   return null;
 }
@@ -724,9 +730,16 @@ document.getElementById("addBtn").addEventListener("click", startDraw);
 function startDraw(){ closeDrawer(); resetTemp();
   document.getElementById("hint").classList.add("show");
   document.getElementById("addBtn").style.display="none";
-  drawHandler=new L.Draw.Polygon(map,{shapeOptions:{color:"#8E4A77",weight:2.5,fillOpacity:.22},allowIntersection:false});
+  drawHandler=new L.Draw.Polygon(map,{ allowIntersection:true, showArea:false,
+    shapeOptions:{color:"#8E4A77",weight:2.5,fillOpacity:.22} });
   drawHandler.enable();
 }
+document.getElementById("hintUndo").addEventListener("click", ()=>{
+  try{ drawHandler && drawHandler.deleteLastVertex && drawHandler.deleteLastVertex(); }catch(e){} });
+document.getElementById("hintFinish").addEventListener("click", ()=>{
+  try{ if(drawHandler){ if(typeof drawHandler.completeShape==="function") drawHandler.completeShape();
+        else if(typeof drawHandler._finishShape==="function") drawHandler._finishShape(); } }
+  catch(e){ toast("Add at least 3 points first."); } });
 document.getElementById("hintCancel").addEventListener("click", cancelDraw);
 function cancelDraw(){ if(drawHandler){ drawHandler.disable(); drawHandler=null; }
   document.getElementById("hint").classList.remove("show"); document.getElementById("addBtn").style.display=""; }
