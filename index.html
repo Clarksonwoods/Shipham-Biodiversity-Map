@@ -290,7 +290,7 @@
   </div>
   <div class="drawer__foot">
     <button type="button" class="btn btn--ghost" id="cancelBtn">Cancel</button>
-    <button type="submit" class="btn btn--primary" id="saveBtn">Save project</button>
+    <button type="button" class="btn btn--primary" id="saveBtn">Save project</button>
   </div>
 </form>
 
@@ -800,8 +800,7 @@ document.getElementById("hintFinish").addEventListener("click", ()=>{
 document.getElementById("hintCancel").addEventListener("click", cancelDraw);
 function cancelDraw(){ clearDrawPreview(); if(!tempLayer) document.getElementById("addBtn").style.display=""; }
 
-function openDrawer(){ scrim.classList.add("show"); drawer.classList.add("show");
-  setTimeout(()=>document.getElementById("f-name").focus(),300); }
+function openDrawer(){ scrim.classList.add("show"); drawer.classList.add("show"); }
 function closeDrawer(){ scrim.classList.remove("show"); drawer.classList.remove("show"); }
 function resetTemp(){ if(tempLayer){ map.removeLayer(tempLayer); tempLayer=null; }
   photoFiles=[]; renderThumbs(); document.getElementById("step1").classList.remove("done"); }
@@ -835,8 +834,9 @@ function resizeImage(file,max=1600,q=.82){ return new Promise(res=>{ const img=n
     c.toBlob(b=>res(b||file),"image/jpeg",q); }; img.onerror=()=>res(file); img.src=URL.createObjectURL(file); }); }
 const blobToDataURL = b => new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(b); });
 
-drawer.addEventListener("submit", async e=>{
-  e.preventDefault();
+let _submitting=false;
+async function submitProject(){
+  if(_submitting) return;
   const name=document.getElementById("f-name").value.trim();
   const desc=document.getElementById("f-desc").value.trim();
   const by  =document.getElementById("f-by").value.trim();
@@ -846,6 +846,7 @@ drawer.addEventListener("submit", async e=>{
   if(editing){ try{ geom=editLayer.toGeoJSON().geometry; }catch(_){ } }
   else { if(!tempLayer){ toast("Please draw your project area on the map first."); return; } geom=tempLayer.toGeoJSON().geometry; }
   const files=photoFiles.slice();
+  _submitting=true;
   closeForm();                        // return to the map straight away
   toast(editing ? "Saving changes…" : "Saving your project…");
   try{
@@ -877,7 +878,10 @@ drawer.addEventListener("submit", async e=>{
     }
     await loadProjects();
   }catch(err){ console.error(err); toast("Sorry — saving failed. Please try again."); if(editing) loadProjects(); }
-});
+  finally{ _submitting=false; }
+}
+drawer.addEventListener("submit", e=>{ e.preventDefault(); submitProject(); });
+document.getElementById("saveBtn").addEventListener("click", e=>{ e.preventDefault(); submitProject(); });
 
 /* ---------- Context layers (lazy: fetched only when switched on) ---------- */
 const itemUrlCache={};
