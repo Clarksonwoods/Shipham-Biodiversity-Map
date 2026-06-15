@@ -22,12 +22,12 @@
     --shadow:0 6px 24px rgba(30,42,35,.16); --radius:16px;
   }
   *{box-sizing:border-box}
-  /* Leaflet positions tiles, markers & vector layers assuming content-box —
-     restore it for its elements so draw vertices line up with the polygon. */
-  .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,
-  .leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas,.leaflet-zoom-box,
-  .leaflet-image-layer,.leaflet-layer,.leaflet-editing-icon,.leaflet-div-icon,
-  .leaflet-vertex-icon,.leaflet-marker-pane *{box-sizing:content-box}
+  /* Pin the draw/edit vertex handles to a fixed size centred on their point
+     (Leaflet's touch CSS resizes them but leaves the old centring, which made
+     the handles sit SW of their point and the polygon look offset NE). */
+  .leaflet-editing-icon,.leaflet-touch .leaflet-editing-icon{
+    width:14px!important;height:14px!important;margin-left:-7px!important;margin-top:-7px!important;
+    box-sizing:content-box!important;background:#fff;border:2px solid #8E4A77;border-radius:50%}
   html,body{height:100%;margin:0}
   body{font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);
     background:var(--paper);overflow:hidden;-webkit-tap-highlight-color:transparent}
