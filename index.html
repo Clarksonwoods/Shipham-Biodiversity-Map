@@ -94,6 +94,9 @@
   .hint span{flex-basis:100%}
   .hint button{background:rgba(255,255,255,.16);border:none;color:#fff;border-radius:999px;padding:5px 14px;
     font-size:.8rem;cursor:pointer;font-family:inherit}
+  #xhair{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1100;display:none;
+    pointer-events:none;filter:drop-shadow(0 0 2px rgba(255,255,255,.95))}
+  #xhair.show{display:block}
   @media (max-width:560px){ .leaflet-draw-tooltip{display:none} }
 
   .scrim{position:absolute;inset:0;background:rgba(20,30,24,.32);z-index:1500;opacity:0;pointer-events:none;
@@ -242,11 +245,20 @@
 </aside>
 
 <div class="hint" id="hint">
-  <span>Tap to add points · drag with one finger to move the map</span>
+  <span>Move the map to aim the crosshair, then add each corner of your area</span>
+  <button id="hintAdd">Add point</button>
   <button id="hintUndo">Undo</button>
   <button id="hintFinish">Finish</button>
   <button id="hintCancel">Cancel</button>
 </div>
+<div id="xhair" aria-hidden="true"><svg width="46" height="46" viewBox="0 0 46 46">
+  <circle cx="23" cy="23" r="10" fill="none" stroke="#8E4A77" stroke-width="2.5"/>
+  <line x1="23" y1="1" x2="23" y2="13" stroke="#8E4A77" stroke-width="2.5"/>
+  <line x1="23" y1="33" x2="23" y2="45" stroke="#8E4A77" stroke-width="2.5"/>
+  <line x1="1" y1="23" x2="13" y2="23" stroke="#8E4A77" stroke-width="2.5"/>
+  <line x1="33" y1="23" x2="45" y2="23" stroke="#8E4A77" stroke-width="2.5"/>
+  <circle cx="23" cy="23" r="2.5" fill="#8E4A77"/>
+</svg></div>
 
 <button class="fab" id="addBtn">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -746,32 +758,47 @@ function toast(m){ toastEl.textContent=m; toastEl.classList.add("show");
 
 /* ================= ADD-A-PROJECT ================= */
 const drawer=document.getElementById("drawer"), scrim=document.getElementById("scrim");
-let drawHandler=null, tempLayer=null, photoFiles=[];
+let tempLayer=null, photoFiles=[];
+let drawPts=[], drawPreview=null, drawDots=null;
+const xhair=document.getElementById("xhair");
 document.getElementById("storageNote").innerHTML = backendReady
   ? "Your project will appear on the map for everyone, right away."
   : "<b>Preview mode.</b> This map isn't connected to shared storage yet, so projects you add show only in your browser until you refresh. See README.md to switch on shared saving (free).";
 
 document.getElementById("addBtn").addEventListener("click", startDraw);
-function startDraw(){ closeDrawer(); resetTemp();
+function startDraw(){ closeDrawer(); resetTemp(); clearDrawPreview();
+  drawPts=[];
+  drawPreview = L.polygon([], {color:"#8E4A77",weight:2.5,fillColor:"#8E4A77",fillOpacity:.18,dashArray:"5 5"}).addTo(map);
+  drawDots = L.layerGroup().addTo(map);
+  xhair.classList.add("show");
   document.getElementById("hint").classList.add("show");
   document.getElementById("addBtn").style.display="none";
-  drawHandler=new L.Draw.Polygon(map,{ allowIntersection:true, showArea:false,
-    shapeOptions:{color:"#8E4A77",weight:2.5,fillOpacity:.22} });
-  drawHandler.enable();
 }
+function redrawDrawPreview(){
+  if(drawPreview) drawPreview.setLatLngs(drawPts);
+  if(drawDots){ drawDots.clearLayers();
+    drawPts.forEach(ll=> L.circleMarker(ll,{radius:5,color:"#fff",weight:2,fillColor:"#8E4A77",fillOpacity:1}).addTo(drawDots)); }
+}
+function clearDrawPreview(){
+  if(drawPreview){ map.removeLayer(drawPreview); drawPreview=null; }
+  if(drawDots){ map.removeLayer(drawDots); drawDots=null; }
+  drawPts=[]; xhair.classList.remove("show");
+  document.getElementById("hint").classList.remove("show");
+}
+document.getElementById("hintAdd").addEventListener("click", ()=>{
+  if(!drawPreview) return; drawPts.push(map.getCenter()); redrawDrawPreview(); });
 document.getElementById("hintUndo").addEventListener("click", ()=>{
-  try{ drawHandler && drawHandler.deleteLastVertex && drawHandler.deleteLastVertex(); }catch(e){} });
+  if(!drawPts.length) return; drawPts.pop(); redrawDrawPreview(); });
 document.getElementById("hintFinish").addEventListener("click", ()=>{
-  try{ if(drawHandler){ if(typeof drawHandler.completeShape==="function") drawHandler.completeShape();
-        else if(typeof drawHandler._finishShape==="function") drawHandler._finishShape(); } }
-  catch(e){ toast("Add at least 3 points first."); } });
+  if(drawPts.length<3){ toast("Add at least 3 points to make an area."); return; }
+  const pts=drawPts.slice(); clearDrawPreview();
+  tempLayer=L.polygon(pts,{color:"#8E4A77",weight:2.5,fillColor:"#8E4A77",fillOpacity:.22}).addTo(map);
+  try{ map.fitBounds(tempLayer.getBounds(),{padding:[60,60],maxZoom:17}); }catch(e){}
+  document.getElementById("step1").classList.add("done");
+  openDrawer();
+});
 document.getElementById("hintCancel").addEventListener("click", cancelDraw);
-function cancelDraw(){ if(drawHandler){ drawHandler.disable(); drawHandler=null; }
-  document.getElementById("hint").classList.remove("show"); document.getElementById("addBtn").style.display=""; }
-map.on(L.Draw.Event.CREATED, e=>{ tempLayer=e.layer;
-  tempLayer.setStyle?.({color:"#8E4A77",weight:2.5,fillOpacity:.22}); tempLayer.addTo(map);
-  map.fitBounds(tempLayer.getBounds(),{padding:[60,60],maxZoom:17}); cancelDraw(); openDrawer();
-  document.getElementById("step1").classList.add("done"); });
+function cancelDraw(){ clearDrawPreview(); if(!tempLayer) document.getElementById("addBtn").style.display=""; }
 
 function openDrawer(){ scrim.classList.add("show"); drawer.classList.add("show");
   setTimeout(()=>document.getElementById("f-name").focus(),300); }
