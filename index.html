@@ -224,7 +224,7 @@
       <span class="layer__txt"><b>Habitats &amp; woodland</b><small>coloured by habitat type <span class="count" id="c-habitats"></span></small></span></label>
     <label class="layer"><input type="checkbox" id="lyr-flood">
       <span class="swatch" style="background:#5DA8E0"></span>
-      <span class="layer__txt"><b>Flood risk</b><small>Environment Agency <span class="count" id="c-flood"></span></small></span></label>
+      <span class="layer__txt"><b>Flood risk</b><small>surface water · EA <span class="count" id="c-flood"></span></small></span></label>
     <label class="layer"><input type="checkbox" id="lyr-prow" checked>
       <span class="swatch" style="background:transparent;height:0;border:0;border-top:3px dashed #2EE65C;width:15px;margin-top:8px;border-radius:0"></span>
       <span class="layer__txt"><b>Public rights of way</b><small>footpaths &amp; bridleways <span class="count" id="c-prow"></span></small></span></label>
@@ -240,7 +240,7 @@
     </div>
     <div style="border-top:1px solid var(--line);margin:8px 8px 0;padding-top:8px">
       <button id="adminBtn" style="width:100%;border:1px solid var(--line);background:#fff;color:var(--muted);padding:7px;border-radius:9px;font-size:.73rem;font-weight:600;cursor:pointer;font-family:inherit">Manage as admin</button>
-      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-l</div>
+      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-n</div>
     </div>
   </div>
 </aside>
@@ -322,9 +322,9 @@ const CONTEXT_LAYERS = [
     style:{stroke:false,fillOpacity:.6}, fastClip:true,
     colorBy:["hab","Main_Habit","mainhabs","MAIN_HABIT","habitat","Habitat","HABITAT","IFT_IOA","CATEGORY","Category","Woodland_Type"],
     sources:[ {geojson:"shipham-habitats.geojson"} ] },
-  { key:"flood", label:"Flood risk (rivers & sea)", sub:"Environment Agency",
-    style:{color:"#2E78B5",weight:0.5,fillColor:"#5DA8E0",fillOpacity:.45},
-    sources:[ {item:"a29d804c91174ef9a4382ae182da9051"} ] },
+  { key:"flood", label:"Flood risk (surface water)", sub:"Environment Agency RoFSW",
+    wms:{ url:"https://environment.data.gov.uk/spatialdata/nafra2-risk-of-flooding-from-surface-water/wms",
+          layers:"rofsw_4band", opacity:0.55 } },
   { key:"prow", label:"Public rights of way", sub:"footpaths, bridleways & byways",
     style:{color:"#2EE65C",weight:3,opacity:.98,dashArray:"6 6",fill:false},
     sources:[ {geojson:"shipham-prow.geojson"} ] }
@@ -479,8 +479,8 @@ async function queryNE(cfg, bounds){
 /* ---------- Cached, non-destructive loading (keeps popups open) ---------- */
 const seen = { sssi:new Set(), lnr:new Set(), inat:new Set() };
 let loadedArea = null;
-let parishBuffer = null;   // 500 m buffer around the parish; general overlays trimmed to it
-let designatedBuffer = null;   // 1 km buffer; SSSIs and nature reserves trimmed to this
+let parishBuffer = null;   // 1.5 km buffer around the parish; general overlays included if they reach it
+let designatedBuffer = null;   // 2.5 km buffer; SSSIs and nature reserves included if they reach it
 let _bufPolys = null;
 function bufferPolys(){
   if(_bufPolys) return _bufPolys;
@@ -495,36 +495,15 @@ function nearParishPoint(lng,lat){
   if(!parishBuffer || typeof turf==="undefined") return true;
   try{ return turf.booleanPointInPolygon([lng,lat], parishBuffer); }catch(e){ return true; }
 }
-/* Trim a feature's geometry to within a given buffer polygon. Returns a clipped
-   feature, or null if it falls entirely outside. */
+/* Inclusion test only: returns the WHOLE feature if it touches the buffer, else null.
+   No geometry trimming — features crossing the buffer edge are shown in full. */
 function clipToBuffer(f, buf){
   if(!buf || typeof turf==="undefined") return f;
   const t=f.geometry && f.geometry.type;
   try{
-    if(t==="Polygon"||t==="MultiPolygon"){
-      const c=turfIntersect(f, buf);
-      if(c){ c.properties=f.properties; return c; }
-      // exact clip failed/empty (common with complex flood polygons) — keep whole if it overlaps
-      try{ return turf.booleanIntersects(f, buf) ? f : null; }catch(e){ return f; }
-    }
-    if(t==="LineString"||t==="MultiLineString"){
-      let buffPolys; try{ buffPolys = turf.flatten(buf).features; }catch(_){ buffPolys=[buf]; }
-      let lines;     try{ lines = turf.flatten(f).features; }catch(_){ lines=[f]; }
-      const kept=[];
-      for(const line of lines){
-        for(const poly of buffPolys){
-          let segs=[line];                               // default: whole line (covers fully-inside paths)
-          try{ const sp=turf.lineSplit(line, poly).features; if(sp && sp.length) segs=sp; }catch(_){}
-          for(const seg of segs){ const cs=seg.geometry.coordinates;
-            if(cs.length>=2 && turf.booleanPointInPolygon(cs[Math.floor(cs.length/2)], poly)) kept.push(cs); }
-        }
-      }
-      if(!kept.length) return null;
-      return {type:"Feature", properties:f.properties, geometry:{type:"MultiLineString", coordinates:kept}};
-    }
-    if(t==="Point") return turf.booleanPointInPolygon(f.geometry.coordinates, buf)? f : null;
-    return f;
-  }catch(e){ return f; }
+    if(t==="Point") return turf.booleanPointInPolygon(f.geometry.coordinates, buf) ? f : null;
+    return turf.booleanIntersects(f, buf) ? f : null;
+  }catch(e){ return f; }   // on any error, keep the whole feature
 }
 function clipToParish(f){ return clipToBuffer(f, parishBuffer); }   // 500 m (general overlays)
 /* Cheap inclusion test (no geometry trimming) — used for high-volume layers
@@ -650,8 +629,8 @@ async function loadParish(){
   const gj=await fetchParish();
   if(gj){
     if(typeof turf!=="undefined"){
-      try{ parishBuffer = turf.buffer(gj.features[0], 0.5, {units:"kilometers"});
-           designatedBuffer = turf.buffer(gj.features[0], 1.0, {units:"kilometers"}); }
+      try{ parishBuffer = turf.buffer(gj.features[0], 1.5, {units:"kilometers"});
+           designatedBuffer = turf.buffer(gj.features[0], 2.5, {units:"kilometers"}); }
       catch(e){ console.warn("Parish buffer failed; overlays won't be clipped.", e); }
     }
     L.geoJSON(gj,{style:{color:"#ffffff",weight:6,opacity:.85,fill:false}}).addTo(parishGroup); // white halo
@@ -964,6 +943,7 @@ function contextPopup(cfg, p){
     + (detail?`<h3 style="font-size:.95rem">${esc(detail)}</h3>`:`<p class="by">${esc(cfg.sub)}</p>`) + `</div>`;
 }
 async function loadContext(cfg){
+  if(cfg.wms) return;                               // raster overlay — nothing to fetch/clip
   if(cfg._loaded || cfg._loading) return; cfg._loading=true;
   const el=document.getElementById("c-"+cfg.key); if(el) el.textContent="· …";
   if(!cfg.sources || !cfg.sources.some(s=>s.item||(s.url&&!/PASTE/i.test(s.url))||s.geojson)){
@@ -1002,6 +982,18 @@ async function loadContext(cfg){
   if(!any) toast(`Couldn't load ${cfg.label} just now.`);
 }
 CONTEXT_LAYERS.forEach(cfg=>{
+  if(cfg.wms){                                   // raster overlay (e.g. EA flood WMS) — no clipping/loading
+    cfg.layer = L.tileLayer.wms(cfg.wms.url, {
+      layers: cfg.wms.layers, format:"image/png", transparent:true, version:"1.1.1",
+      opacity: cfg.wms.opacity!=null?cfg.wms.opacity:0.55, maxZoom:20,
+      attribution:"© Environment Agency" });
+    const cbw=document.getElementById("lyr-"+cfg.key);
+    if(cbw) cbw.addEventListener("change", e=>{
+      e.target.checked ? map.addLayer(cfg.layer) : map.removeLayer(cfg.layer);
+      const el=document.getElementById("c-"+cfg.key); if(el) el.textContent = e.target.checked ? "· on" : "";
+    });
+    return;
+  }
   cfg._c = cfg.colorBy ? "#4E8E63" : (cfg.style.fillColor || cfg.style.color);
   cfg.layer = L.geoJSON(null, {
     style: f => { const p=f.properties||{};
