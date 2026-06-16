@@ -241,7 +241,7 @@
     </div>
     <div style="border-top:1px solid var(--line);margin:8px 8px 0;padding-top:8px">
       <button id="adminBtn" style="width:100%;border:1px solid var(--line);background:#fff;color:var(--muted);padding:7px;border-radius:9px;font-size:.73rem;font-weight:600;cursor:pointer;font-family:inherit">Manage as admin</button>
-      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-r</div>
+      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-t</div>
     </div>
   </div>
 </aside>
@@ -319,11 +319,11 @@ const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
    service. Two of them have a paste-in slot — copy the layer's service URL from
    your ArcGIS map (…/FeatureServer/0) into the {url:"…"} blanks below.        */
 const CONTEXT_LAYERS = [
-  { key:"habitats", label:"Habitats", sub:"priority habitats over woodland & trees",
+  { key:"habitats", label:"Habitats", sub:"priority habitats over woodland & trees", pane:"habitatsPane",
     style:{stroke:false,fillOpacity:.6}, fastClip:true,
     colorBy:["hab","Main_Habit","mainhabs","MAIN_HABIT","habitat","Habitat","HABITAT","IFT_IOA","CATEGORY","Category","Woodland_Type"],
     sources:[ {geojson:"shipham-habitats.geojson"} ] },
-  { key:"flood", label:"Flood risk (surface water)", sub:"Environment Agency RoFSW",
+  { key:"flood", label:"Flood risk (surface water)", sub:"Environment Agency RoFSW", pane:"floodPane",
     wms:{ url:"https://environment.data.gov.uk/spatialdata/nafra2-risk-of-flooding-from-surface-water/wms",
           layers:"rofsw", opacity:0.55, bounds:[[51.283,-2.865],[51.347,-2.735]] } },
   { key:"prow", label:"Public rights of way", sub:"footpaths, bridleways & byways",
@@ -342,6 +342,9 @@ const mtReady = MAPTILER_KEY && !MAPTILER_KEY.includes("YOUR_");
 /* ---------- Map ---------- */
 const map = L.map("map", { zoomControl:false, maxZoom:20 }).setView([SHIPHAM.lat, SHIPHAM.lng], SHIPHAM.zoom);
 L.control.zoom({ position:"bottomleft" }).addTo(map);
+// Background context panes (below the default overlayPane=400 used by parish, SSSI, projects, PRoW):
+map.createPane("habitatsPane"); map.getPane("habitatsPane").style.zIndex = 350;   // habitats lowest
+map.createPane("floodPane");    map.getPane("floodPane").style.zIndex    = 360;   // flood just above habitats
 
 /* Satellite — MapTiler if a key is supplied (sharper), else keyless Esri */
 const satLayer = mtReady
@@ -925,16 +928,31 @@ function paletteColor(name){ name=name||"—"; if(!(name in _palMap)){ _palMap[n
    and other habitats never look like woodland. */
 function habitatColor(name){
   const n=(name||"").toLowerCase();
-  if(/wood|tree|copse|orchard|parkland/.test(n))                       return "#2E7D32"; // green
-  if(/grass|meadow|pasture|calcareous|acid grass|neutral grass/.test(n))return "#E0A52E"; // gold
-  if(/heath|moor/.test(n))                                             return "#9C4D9C"; // purple
-  if(/bog|fen|marsh|mire|wetland|reedbed|swamp|flush|grazing/.test(n)) return "#1E88A8"; // teal-blue
-  if(/scrub/.test(n))                                                  return "#9E9D24"; // olive
-  if(/coast|saltmarsh|dune|shingle|maritime|saline|inter.?tidal/.test(n))return "#C2A36B"; // sand
-  if(/arable|hedge|cereal/.test(n))                                    return "#B07A3C"; // brown
-  if(/rock|scree|limestone pavement|cave/.test(n))                     return "#9E9E9E"; // grey
+  // woodland & trees
+  if(/orchard/.test(n))                                   return "#7CB342"; // lime
+  if(/wood|tree|copse|parkland/.test(n))                  return "#2E7D32"; // green
+  // heath / moor / rush — before generic grass so "purple moor grass" isn't read as grass
+  if(/purple moor|rush pasture/.test(n))                  return "#7B4FA0"; // violet
+  if(/heath|moor/.test(n))                                return "#9C4D9C"; // purple
+  // wetlands — before generic grass so "grazing marsh" etc. aren't read as grass
+  if(/grazing marsh|floodplain/.test(n))                  return "#26A69A"; // teal-green
+  if(/reedbed|swamp/.test(n))                             return "#2E9E8F"; // sea green
+  if(/fen|mire|flush/.test(n))                            return "#1E88A8"; // teal-blue
+  if(/bog/.test(n))                                       return "#5D8AA8"; // slate
+  if(/marsh|wetland/.test(n))                             return "#3DA5C4"; // light blue
+  // grasslands by sub-type
+  if(/calcareous|limestone grass/.test(n))                return "#E0A52E"; // gold
+  if(/acid grass/.test(n))                                return "#C9B037"; // mustard
+  if(/meadow|neutral grass/.test(n))                      return "#F4922B"; // orange
+  if(/semi-improved|semi improved/.test(n))               return "#BDB76B"; // khaki
+  if(/grass|pasture/.test(n))                             return "#D4B14A"; // generic grass
+  // scrub / coastal / other
+  if(/scrub/.test(n))                                     return "#9E9D24"; // olive
+  if(/coast|saltmarsh|dune|shingle|maritime|saline|inter.?tidal|cliff|mudflat/.test(n)) return "#C2A36B"; // sand
+  if(/arable|hedge|cereal/.test(n))                       return "#B07A3C"; // brown
+  if(/rock|scree|limestone pavement|cave|calaminarian|inland rock/.test(n)) return "#9E9E9E"; // grey
   if(!n) return "#7E57C2";
-  return paletteColor(n);
+  return paletteColor(n);   // anything else → its own stable colour
 }
 function fieldVal(p, keys){ for(const k of keys){ if(p && p[k]!=null && p[k]!=="") return String(p[k]); } return ""; }
 function contextPopup(cfg, p){
@@ -986,6 +1004,7 @@ CONTEXT_LAYERS.forEach(cfg=>{
   if(cfg.wms){                                   // raster overlay (e.g. EA flood WMS) — no clipping/loading
     const wopt={ layers:cfg.wms.layers, format:"image/png", transparent:true, version:"1.1.1",
       opacity: cfg.wms.opacity!=null?cfg.wms.opacity:0.55, maxZoom:20, attribution:"© Environment Agency" };
+    if(cfg.pane) wopt.pane=cfg.pane;
     if(cfg.wms.bounds) wopt.bounds=L.latLngBounds(cfg.wms.bounds);   // only request tiles over Shipham
     cfg.layer = L.tileLayer.wms(cfg.wms.url, wopt);
     const cbw=document.getElementById("lyr-"+cfg.key);
@@ -997,6 +1016,7 @@ CONTEXT_LAYERS.forEach(cfg=>{
   }
   cfg._c = cfg.colorBy ? "#4E8E63" : (cfg.style.fillColor || cfg.style.color);
   cfg.layer = L.geoJSON(null, {
+    pane: cfg.pane || undefined,
     style: f => { const p=f.properties||{};
       if(p.__fill) return Object.assign({}, cfg.style, { fillColor:p.__fill });
       if(cfg.colorBy) return Object.assign({}, cfg.style, { fillColor: habitatColor(fieldVal(p, cfg.colorBy)) });
