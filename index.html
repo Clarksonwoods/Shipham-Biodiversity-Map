@@ -222,10 +222,10 @@
     </div>
     <label class="layer"><input type="checkbox" id="lyr-habitats">
       <span class="swatch" style="background:linear-gradient(90deg,#2E7D32,#9CCC65,#26A69A)"></span>
-      <span class="layer__txt"><b>Habitats</b><small>coloured by habitat type <span class="count" id="c-habitats"></span></small></span></label>
+      <span class="layer__txt"><b>Habitats</b><small>Priority habitats and woodland <span class="count" id="c-habitats"></span></small></span></label>
     <label class="layer"><input type="checkbox" id="lyr-flood">
       <span class="swatch" style="background:#5DA8E0"></span>
-      <span class="layer__txt"><b>Flood risk</b><small>surface water · EA <span class="count" id="c-flood"></span></small></span></label>
+      <span class="layer__txt"><b>Surface water</b><small>EA flood risk zones <span class="count" id="c-flood"></span></small></span></label>
     <label class="layer"><input type="checkbox" id="lyr-prow" checked>
       <span class="swatch" style="background:transparent;height:0;border:0;border-top:3px dashed #2EE65C;width:15px;margin-top:8px;border-radius:0"></span>
       <span class="layer__txt"><b>Public rights of way</b><small>footpaths &amp; bridleways <span class="count" id="c-prow"></span></small></span></label>
@@ -241,7 +241,7 @@
     </div>
     <div style="border-top:1px solid var(--line);margin:8px 8px 0;padding-top:8px">
       <button id="adminBtn" style="width:100%;border:1px solid var(--line);background:#fff;color:var(--muted);padding:7px;border-radius:9px;font-size:.73rem;font-weight:600;cursor:pointer;font-family:inherit">Manage as admin</button>
-      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-t</div>
+      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-u</div>
     </div>
   </div>
 </aside>
@@ -319,13 +319,13 @@ const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
    service. Two of them have a paste-in slot — copy the layer's service URL from
    your ArcGIS map (…/FeatureServer/0) into the {url:"…"} blanks below.        */
 const CONTEXT_LAYERS = [
-  { key:"habitats", label:"Habitats", sub:"priority habitats over woodland & trees", pane:"habitatsPane",
+  { key:"habitats", label:"Habitats", sub:"Priority habitats and woodland", pane:"habitatsPane",
     style:{stroke:false,fillOpacity:.6}, fastClip:true,
     colorBy:["hab","Main_Habit","mainhabs","MAIN_HABIT","habitat","Habitat","HABITAT","IFT_IOA","CATEGORY","Category","Woodland_Type"],
     sources:[ {geojson:"shipham-habitats.geojson"} ] },
-  { key:"flood", label:"Flood risk (surface water)", sub:"Environment Agency RoFSW", pane:"floodPane",
+  { key:"flood", label:"Surface water", sub:"EA flood risk zones", pane:"floodPane",
     wms:{ url:"https://environment.data.gov.uk/spatialdata/nafra2-risk-of-flooding-from-surface-water/wms",
-          layers:"rofsw", opacity:0.55, bounds:[[51.283,-2.865],[51.347,-2.735]] } },
+          layers:"rofsw", opacity:0.8, bounds:[[51.283,-2.865],[51.347,-2.735]] } },
   { key:"prow", label:"Public rights of way", sub:"footpaths, bridleways & byways",
     style:{color:"#2EE65C",weight:3,opacity:.98,dashArray:"6 6",fill:false},
     sources:[ {geojson:"shipham-prow.geojson"} ] }
@@ -357,9 +357,9 @@ const osOutdoor = osReady ? L.tileLayer(`https://api.os.uk/maps/raster/v1/zxy/Ou
 const labels = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png",
       { subdomains:"abcd", maxZoom:20, attribution:"&copy; OpenStreetMap &copy; CARTO" });
 
-/* EA LIDAR Composite 1 m DSM (optional terrain basemap).
+/* EA LIDAR Composite hillshade (optional terrain basemap).
    Esri ImageServer rendered per-tile via exportImage, reprojected to Web Mercator. */
-const LIDAR_URL = "https://environment.data.gov.uk/image/rest/services/SURVEY/Lidar_Composite_LZ_DSM_1m/ImageServer/exportImage";
+const LIDAR_URL = "https://environment.data.gov.uk/image/rest/services/SURVEY/LIDAR_Composite_1m_DTM_2020_Hillshade/ImageServer/exportImage";
 const LidarTileLayer = L.TileLayer.extend({
   getTileUrl: function(coords){
     const b=this._tileCoordsToBounds(coords);
