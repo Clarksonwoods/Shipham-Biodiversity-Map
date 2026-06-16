@@ -240,7 +240,7 @@
     </div>
     <div style="border-top:1px solid var(--line);margin:8px 8px 0;padding-top:8px">
       <button id="adminBtn" style="width:100%;border:1px solid var(--line);background:#fff;color:var(--muted);padding:7px;border-radius:9px;font-size:.73rem;font-weight:600;cursor:pointer;font-family:inherit">Manage as admin</button>
-      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-n</div>
+      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-o</div>
     </div>
   </div>
 </aside>
@@ -983,10 +983,15 @@ async function loadContext(cfg){
 }
 CONTEXT_LAYERS.forEach(cfg=>{
   if(cfg.wms){                                   // raster overlay (e.g. EA flood WMS) — no clipping/loading
-    cfg.layer = L.tileLayer.wms(cfg.wms.url, {
-      layers: cfg.wms.layers, format:"image/png", transparent:true, version:"1.1.1",
-      opacity: cfg.wms.opacity!=null?cfg.wms.opacity:0.55, maxZoom:20,
-      attribution:"© Environment Agency" });
+    // UK government WMS are served in British National Grid (EPSG:27700); request that
+    // (not Web-Mercator) so GeoServer doesn't reject the GetMap and the tiles return as PNGs.
+    let crsBNG=null;
+    try{ if(window.proj4 && L.Proj) crsBNG = new L.Proj.CRS("EPSG:27700",
+      "+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs"); }catch(_){}
+    const wopt={ layers:cfg.wms.layers, format:"image/png", transparent:true, version:"1.1.1",
+      opacity: cfg.wms.opacity!=null?cfg.wms.opacity:0.55, maxZoom:20, attribution:"© Environment Agency" };
+    if(crsBNG) wopt.crs=crsBNG;
+    cfg.layer = L.tileLayer.wms(cfg.wms.url, wopt);
     const cbw=document.getElementById("lyr-"+cfg.key);
     if(cbw) cbw.addEventListener("change", e=>{
       e.target.checked ? map.addLayer(cfg.layer) : map.removeLayer(cfg.layer);
@@ -1053,6 +1058,16 @@ function loadScript(urls){
       "https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js",
       "https://unpkg.com/@turf/turf@7/turf.min.js"]); }
     catch(e){ console.warn("Turf unavailable; 500 m clipping disabled.", e); }
+    try{
+      await loadScript([
+        "https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js",
+        "https://cdn.jsdelivr.net/npm/proj4@2.11.0/dist/proj4.js",
+        "https://unpkg.com/proj4@2.11.0/dist/proj4.js"]);
+      await loadScript([
+        "https://cdnjs.cloudflare.com/ajax/libs/proj4leaflet/1.0.2/proj4leaflet.min.js",
+        "https://cdn.jsdelivr.net/npm/proj4leaflet@1.0.2/src/proj4leaflet.js",
+        "https://unpkg.com/proj4leaflet@1.0.2/src/proj4leaflet.js"]);
+    }catch(e){ console.warn("proj4 unavailable; surface-water flood overlay may not render.", e); }
     initApp();
   }catch(err){
     console.error(err);
