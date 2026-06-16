@@ -240,7 +240,7 @@
     </div>
     <div style="border-top:1px solid var(--line);margin:8px 8px 0;padding-top:8px">
       <button id="adminBtn" style="width:100%;border:1px solid var(--line);background:#fff;color:var(--muted);padding:7px;border-radius:9px;font-size:.73rem;font-weight:600;cursor:pointer;font-family:inherit">Manage as admin</button>
-      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-j</div>
+      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-k</div>
     </div>
   </div>
 </aside>
@@ -700,19 +700,28 @@ function addProjectFeature(p){
     properties:{id:p.id,name:p.name,description:p.description,contributor:p.contributor,photos:p.photos||[]}}); }
   catch(e){ console.warn("Couldn't draw a project:", e); }
 }
+let _loadDiagDone=false;
 async function loadProjects(){
-  let rows=null;
+  let rows=null, how="", note="";
   if(gasReady){
-    try{ const j=await jsonp(APPS_SCRIPT_URL); if(j && j.ok) rows=j.projects||[]; }
-    catch(e){ console.warn("Couldn't load projects from Google backend", e); }
+    try{ const r=await fetch(APPS_SCRIPT_URL); const j=await r.json(); if(j&&j.ok){ rows=j.projects||[]; how="fetch"; } }
+    catch(e){ note="fetch:"+(e&&e.message||e); }
+    if(rows===null){
+      try{ const j=await jsonp(APPS_SCRIPT_URL); if(j&&j.ok){ rows=j.projects||[]; how="jsonp"; } }
+      catch(e){ note+=" jsonp:"+(e&&e.message||e); }
+    }
   } else if(sbReady){
     try{ const {data,error}=await sb.from("projects").select("*").order("created_at",{ascending:false});
-      if(error) console.warn(error); else rows=data||[]; }catch(e){ console.warn(e); }
-  } else rows=sessionProjects;
-  if(rows===null) return;            // fetch failed — keep whatever's already on the map
+      if(error) console.warn(error); else { rows=data||[]; how="supabase"; } }catch(e){ console.warn(e); }
+  } else { rows=sessionProjects; how="session"; }
+  if(rows===null){
+    if(!_loadDiagDone){ _loadDiagDone=true; toast("Couldn't load projects — "+(note||"no response")); }
+    return;
+  }
   projLayer.clearLayers(); for(const k in projectLayers) delete projectLayers[k];
   rows.forEach(addProjectFeature);
   setCount("c-proj", rows.length);
+  if(!_loadDiagDone){ _loadDiagDone=true; toast("Loaded "+rows.length+" projects via "+how); }
 }
 
 /* ---------- Edit / delete a project ---------- */
