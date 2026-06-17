@@ -253,7 +253,7 @@
     </div>
     <div style="border-top:1px solid var(--line);margin:8px 8px 0;padding-top:8px">
       <button id="adminBtn" style="width:100%;border:1px solid var(--line);background:#fff;color:var(--muted);padding:7px;border-radius:9px;font-size:.73rem;font-weight:600;cursor:pointer;font-family:inherit">Manage as admin</button>
-      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-x</div>
+      <div style="text-align:center;font-size:.62rem;color:var(--muted);margin-top:6px;opacity:.7">build 2026-06-15-y</div>
     </div>
   </div>
 </aside>
@@ -369,20 +369,14 @@ const osOutdoor = osReady ? L.tileLayer(`https://api.os.uk/maps/raster/v1/zxy/Ou
 const labels = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png",
       { subdomains:"abcd", maxZoom:20, attribution:"&copy; OpenStreetMap &copy; CARTO" });
 
-/* EA LIDAR Composite 1 m DTM 2022 (optional terrain basemap).
-   Esri MapServer rendered per-tile via export, reprojected to Web Mercator. */
-const LIDAR_URL = "https://environment.data.gov.uk/image/rest/services/SURVEY/LIDARCompositeDTM1m2022/MapServer/export";
-const LidarTileLayer = L.TileLayer.extend({
-  getTileUrl: function(coords){
-    const b=this._tileCoordsToBounds(coords);
-    const sw=L.CRS.EPSG3857.project(b.getSouthWest());
-    const ne=L.CRS.EPSG3857.project(b.getNorthEast());
-    const s=this.getTileSize();
-    return `${LIDAR_URL}?bbox=${sw.x},${sw.y},${ne.x},${ne.y}&bboxSR=3857&imageSR=3857`
-      + `&size=${s.x},${s.y}&format=png&transparent=false&dpi=96&f=image`;
-  }
-});
-const lidarLayer = new LidarTileLayer("", { maxZoom:20, attribution:"LIDAR &copy; Environment Agency (OGL v3)" });
+/* EA National LIDAR Composite 1 m DTM — multi-directional hillshade, terrain basemap.
+   Served via the Environment Agency's supported WMS (their Esri image services are being
+   retired, which is why the older /MapServer export endpoints returned blank tiles).
+   Same delivery mechanism as the working flood layer. */
+const lidarLayer = L.tileLayer.wms(
+  "https://environment.data.gov.uk/spatialdata/lidar-composite-digital-terrain-model-dtm-1m/wms",
+  { layers:"Lidar_Composite_Hillshade_DTM_1m", format:"image/png", transparent:false,
+    version:"1.1.1", maxZoom:20, attribution:"LIDAR DTM hillshade &copy; Environment Agency (OGL v3)" });
 /* National Library of Scotland — OS 25-inch to the mile (Somerset sheets, surveyed 1880s). */
 const nlsLayer = L.tileLayer("https://mapseries-tilesets.s3.amazonaws.com/25_inch/somerset/{z}/{x}/{y}.png",
   { maxZoom:20, maxNativeZoom:20, attribution:"Historical OS 25-inch &copy; National Library of Scotland (CC-BY)" });
