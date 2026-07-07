@@ -350,7 +350,14 @@ const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
    axis order is unambiguous easting,northing) around Shipham — the exact 500 m clip still
    happens client-side. */
 const LNRS_WFS  = "https://maps.somerset.gov.uk/iShareLive.Web/getows.ashx?mapsource=mapsources/SomersetWildlifeTrust_Live3";
-const LNRS_BBOX = "340000,152000,350000,162000,EPSG:27700";   // ~10 km box bracketing the parish
+/* The service only serves EPSG:27700 (British National Grid), so we request in 27700 and
+   reproject to WGS84 in the browser with proj4. bbox + srsName both use the 27700 urn form
+   the capabilities advertises. */
+const LNRS_BBOX = "340000,152000,350000,162000,urn:ogc:def:crs:EPSG::27700";   // ~10 km box bracketing the parish
+if(typeof proj4!=="undefined" && !proj4.defs("EPSG:27700")){
+  proj4.defs("EPSG:27700","+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 "
+    +"+ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs");
+}
 /* The original Somerset LNRS "Local Habitat Map" (Astun iShare Spotlight app) this layer is drawn from. */
 const LNRS_MAP_URL = "https://ol-ishare.services.astuntechnology.com/v1/apps/spotlight/map.html?v=1&ishareurl=https%3A%2F%2Fmaps.somerset.gov.uk%2FiShareLive.Web%2F&navigation=true&gazetteer=true&infopopup=true&layerswitcher=true&layerswitcherLegend=dynamic&layerswitcherOpen=true&panelTitle=Somerset+LNRS+-+Local+Habitat+Map&panelDesc=Click+to+see+the+recommended+measures+for+that+location&profile=mapsources%2FSomersetWildlifeTrust_Live3&easting=345088.55&northing=157180.63&resolution=2.1166666666666667&basemap=mapsources%2Fbase_ospremium_bw&srs=EPSG%3A27700";
 
@@ -1094,15 +1101,17 @@ function contextPopup(cfg, p){
   return h+`</div>`;
 }
 /* Minimal GML (2 or 3) -> GeoJSON parser for the Somerset iShare WFS, which serves no JSON.
-   Handles Point / LineString / Polygon / MultiPolygon / MultiSurface. Because WFS axis order
-   for EPSG:4326 varies by version, coordinates run through a UK range heuristic: a value in
-   ~[49,61] is latitude and ~[-12,5] longitude, so we always emit [lon,lat] whatever came in. */
-function gmlToGeoJSON(xmlText){
+   Handles Point / LineString / Polygon / MultiPolygon / MultiSurface. Coordinates are passed
+   through `proj` when given (e.g. EPSG:27700 easting,northing -> [lon,lat]); with no projector
+   a UK range heuristic normalises whichever lat/lon axis order the server used to [lon,lat]. */
+function gmlToGeoJSON(xmlText, proj){
   const doc = new DOMParser().parseFromString(xmlText||"", "text/xml");
   if(!doc || !doc.documentElement) return { type:"FeatureCollection", features:[] };
   const L = (el,name)=>Array.from(el.getElementsByTagNameNS("*", name));
   const first = (el,name)=>{ const a=el.getElementsByTagNameNS("*", name); return a.length?a[0]:null; };
-  const pair = (a,b)=> (a>40 && a<62 && b>-12 && b<5) ? [b,a] : [a,b];   // lat,lon -> lon,lat when it looks like UK lat/lon
+  const pair = proj
+    ? (a,b)=>{ try{ return proj([a,b]); }catch(e){ return [a,b]; } }
+    : (a,b)=> (a>40 && a<62 && b>-12 && b<5) ? [b,a] : [a,b];   // lat,lon -> lon,lat when it looks like UK lat/lon
   function coordsFromText(t, isCoordinates){
     if(!t) return []; t=t.trim(); if(!t) return []; const out=[];
     if(isCoordinates){ t.split(/\s+/).forEach(tok=>{ const p=tok.split(","); if(p.length>=2) out.push(pair(+p[0],+p[1])); }); }
@@ -1191,16 +1200,17 @@ async function loadContext(cfg){
       }
       if(src.wfs){
         const w=src.wfs;
-        // iShare/MapServer WFS outputs GML only, so we fetch GML and parse it to GeoJSON here.
-        // Request in native EPSG:27700 (bbox axis order unambiguous) and ask for WGS84 output;
-        // gmlToGeoJSON()'s coordinate heuristic tolerates whichever axis order comes back.
+        // iShare/MapServer WFS outputs GML only, and only in EPSG:27700 (British National Grid).
+        // So request in 27700 and reproject each coordinate to WGS84 with proj4 as we parse.
+        if(typeof proj4==="undefined"){ console.warn("LNRS needs proj4 to reproject EPSG:27700 — not loaded."); continue; }
+        const proj = xy => proj4("EPSG:27700","WGS84",xy);
         const u=w.url+(w.url.indexOf("?")>-1?"&":"?")
           +`service=WFS&version=1.1.0&request=GetFeature`
           +`&typename=${encodeURIComponent(w.typeName)}`
-          +`&srsname=urn:ogc:def:crs:EPSG::4326`
+          +`&srsname=urn:ogc:def:crs:EPSG::27700`
           +`&bbox=${w.bbox||LNRS_BBOX}`;
         const r=await fetch(u); if(!r.ok) continue;
-        const gj=gmlToGeoJSON(await r.text());
+        const gj=gmlToGeoJSON(await r.text(), proj);
         (gj.features||[]).forEach(f=>{ const c=include(f); if(!c) return;
           c.properties=c.properties||{};
           if(src.fill) c.properties.__fill=src.fill;
@@ -1295,6 +1305,11 @@ function loadScript(urls){
       "https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js",
       "https://unpkg.com/@turf/turf@7/turf.min.js"]); }
     catch(e){ console.warn("Turf unavailable; 500 m clipping disabled.", e); }
+    try{ await loadScript([
+      "https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js",
+      "https://cdn.jsdelivr.net/npm/proj4@2.11.0/dist/proj4.js",
+      "https://unpkg.com/proj4@2.11.0/dist/proj4.js"]); }
+    catch(e){ console.warn("proj4 unavailable; the LNRS layer (British National Grid) can't be reprojected.", e); }
     initApp();
   }catch(err){
     console.error(err);
