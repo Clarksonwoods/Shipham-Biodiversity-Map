@@ -254,6 +254,9 @@
     <label class="layer"><input type="checkbox" id="lyr-prow" checked>
       <span class="swatch" style="background:transparent;height:0;border:0;border-top:3px dashed #2EE65C;width:15px;margin-top:8px;border-radius:0"></span>
       <span class="layer__txt"><b>Public rights of way</b><small>footpaths &amp; bridleways <span class="count" id="c-prow"></span></small></span></label>
+    <label class="layer"><input type="checkbox" id="lyr-lnrs">
+      <span class="swatch" style="background:linear-gradient(90deg,#2E7D32,#9C4D9C,#3DA5C4)"></span>
+      <span class="layer__txt"><b>Nature recovery (LNRS)</b><small>Somerset habitat priority areas <span class="count" id="c-lnrs"></span></small></span></label>
 
     <div class="basemap">
       <small>Base map</small>
@@ -341,6 +344,10 @@ const APPS_SCRIPT_URL   = "https://script.google.com/macros/s/AKfycbzyBmfJVVTEjp
 
 const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
 
+/* Somerset iShare WFS endpoint (OWS proxy scoped to the Wildlife Trust map profile).
+   The trailing WFS params are added per request in loadContext(). */
+const LNRS_WFS = "https://maps.somerset.gov.uk/iShareLive.Web/getows.ashx?mapsource=mapsources/SomersetWildlifeTrust_Live3";
+
 /* Context layers (all OFF by default). Each pulls from an official open-data
    service. Two of them have a paste-in slot — copy the layer's service URL from
    your ArcGIS map (…/FeatureServer/0) into the {url:"…"} blanks below.        */
@@ -354,7 +361,22 @@ const CONTEXT_LAYERS = [
           layers:"rofsw", opacity:0.8, bounds:[[51.283,-2.865],[51.347,-2.735]] } },
   { key:"prow", label:"Public rights of way", sub:"footpaths, bridleways & byways",
     style:{color:"#2EE65C",weight:3,opacity:.98,dashArray:"6 6",fill:false},
-    sources:[ {geojson:"shipham-prow.geojson"} ] }
+    sources:[ {geojson:"shipham-prow.geojson"} ] },
+  /* Somerset Local Nature Recovery Strategy — habitat priority areas, served live from
+     Somerset Wildlife Trust's iShare (Astun) WFS. Fetched as GeoJSON, then included whole
+     if the polygon reaches within 500 m of the parish (bufferKm:0.5) — no geometry trimming,
+     exactly like the other overlays. If a sub-layer stays empty, confirm its real typeName /
+     outputFormat against the service GetCapabilities (see README) and edit it below. */
+  { key:"lnrs", label:"Nature recovery (LNRS)", sub:"Somerset habitat priority areas", pane:"habitatsPane",
+    style:{stroke:false,fillOpacity:.55,fillColor:"#4E8E63"}, bufferKm:0.5,
+    sources:[
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Woodland"},          fill:"#2E7D32"},  // woodland — green
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Grassland"},         fill:"#D4B14A"},  // grassland — gold
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Wetlands"},          fill:"#3DA5C4"},  // wetlands — light blue
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Moorland_and_Heath"},fill:"#9C4D9C"},  // heath/moor — purple
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Fresh_Water"},       fill:"#1E88A8"},  // fresh water — teal
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Coastal_and_Marine"},fill:"#C2A36B"}   // coastal — sand (inland: usually empty)
+    ] }
 ];
 /* ================================================================= */
 
@@ -547,6 +569,7 @@ const seen = { sssi:new Set(), lnr:new Set(), inat:new Set() };
 let loadedArea = null;
 let parishBuffer = null;   // 1.5 km buffer around the parish; general overlays included if they reach it
 let designatedBuffer = null;   // 2.5 km buffer; SSSIs and nature reserves included if they reach it
+let parishFeature = null;  // raw parish polygon — lets a layer request its own buffer distance (e.g. LNRS at 500 m)
 let _bufPolys = null;
 function bufferPolys(){
   if(_bufPolys) return _bufPolys;
@@ -719,6 +742,7 @@ async function fetchParish(){
 async function loadParish(){
   const gj=await fetchParish();
   if(gj){
+    parishFeature = gj.features[0];
     if(typeof turf!=="undefined"){
       try{ parishBuffer = turf.buffer(gj.features[0], 1.5, {units:"kilometers"});
            designatedBuffer = turf.buffer(gj.features[0], 2.5, {units:"kilometers"}); }
@@ -1061,32 +1085,54 @@ async function loadContext(cfg){
   if(cfg.wms) return;                               // raster overlay — nothing to fetch/clip
   if(cfg._loaded || cfg._loading) return; cfg._loading=true;
   const el=document.getElementById("c-"+cfg.key); if(el) el.textContent="· …";
-  if(!cfg.sources || !cfg.sources.some(s=>s.item||(s.url&&!/PASTE/i.test(s.url))||s.geojson)){
+  if(!cfg.sources || !cfg.sources.some(s=>s.item||(s.url&&!/PASTE/i.test(s.url))||s.geojson||s.wfs)){
     cfg._loaded=true; cfg._loading=false; if(el) el.textContent="";
     toast(`${cfg.label}: add its service URL in the config (see README).`); return;
   }
-  const bb = parishBuffer ? L.geoJSON(parishBuffer).getBounds() : map.getBounds();
+  // Inclusion buffer: most overlays use the shared 1.5 km parishBuffer; a layer can ask for
+  // its own distance with bufferKm (e.g. LNRS at 500 m). Whole features are kept if they reach
+  // this buffer — never trimmed — just like the other layers.
+  let incBuf = parishBuffer;
+  if(cfg.bufferKm && parishFeature && typeof turf!=="undefined"){
+    try{ incBuf = cfg._incBuf || (cfg._incBuf = turf.buffer(parishFeature, cfg.bufferKm, {units:"kilometers"})); }catch(e){}
+  }
+  const bb = incBuf ? L.geoJSON(incBuf).getBounds() : map.getBounds();
   const env=`${bb.getWest()},${bb.getSouth()},${bb.getEast()},${bb.getNorth()}`;
   const qs=`/query?where=1%3D1&geometry=${env}&geometryType=esriGeometryEnvelope&inSR=4326`
     +`&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326&returnGeometry=true`
     +`&maxAllowableOffset=0.00002&resultRecordCount=6000&f=geojson`;   // ~2 m generalisation = far less to draw
-  const fast = cfg.fastClip && parishBuffer;
+  const fast = cfg.fastClip && incBuf;
+  const include = f => {                 // returns the whole feature if it reaches the buffer, else null
+    if(fast) return nearBufferFeature(f, incBuf) ? f : null;   // cheap first-vertex test
+    return clipToBuffer(f, incBuf);                            // exact intersects test — still no trimming
+  };
   let any=false;
   for(const src of cfg.sources){
     try{
       if(src.geojson){
         const r=await fetch(src.geojson); if(!r.ok) continue; const j=await r.json();
-        (j.features||[]).forEach(f=>{
-          let c; if(fast){ if(!nearBufferFeature(f, parishBuffer)) return; c=f; } else { c=clipToParish(f); if(!c) return; }
+        (j.features||[]).forEach(f=>{ const c=include(f); if(!c) return; cfg.layer.addData(c); }); any=true; continue;
+      }
+      if(src.wfs){
+        const w=src.wfs;
+        // iShare/MapServer WFS. version 1.0.0 keeps the bbox in lon/lat (W,S,E,N) order — matching
+        // how the rest of the app builds envelopes — and GeoJSON output is always lon/lat, so it
+        // drops straight into Leaflet/turf. If a sub-layer stays empty, check the real typeName /
+        // outputFormat in the service GetCapabilities and adjust it in CONTEXT_LAYERS (see README).
+        const u=w.url+(w.url.indexOf("?")>-1?"&":"?")
+          +`service=WFS&version=1.0.0&request=GetFeature`
+          +`&typeName=${encodeURIComponent(w.typeName)}`
+          +`&outputFormat=${encodeURIComponent(w.outputFormat||"geojson")}`
+          +`&srsName=EPSG:4326&bbox=${env}`;
+        const r=await fetch(u); if(!r.ok) continue; const j=await r.json();
+        (j.features||[]).forEach(f=>{ const c=include(f); if(!c) return;
+          if(src.fill){ (c.properties=c.properties||{}).__fill=src.fill; }
           cfg.layer.addData(c);
         }); any=true; continue;
       }
       const base=await sourceBase(src); if(!base) continue;
       const r=await fetch(base+qs); if(!r.ok) continue; const j=await r.json();
-      (j.features||[]).forEach(f=>{
-        let c;
-        if(fast){ if(!nearBufferFeature(f, parishBuffer)) return; c=f; }   // cheap include test, no trimming
-        else { c=clipToParish(f); if(!c) return; }
+      (j.features||[]).forEach(f=>{ const c=include(f); if(!c) return;
         if(src.fill){ (c.properties=c.properties||{}).__fill=src.fill; }
         cfg.layer.addData(c);
       }); any=true;
