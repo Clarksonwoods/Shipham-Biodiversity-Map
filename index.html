@@ -345,8 +345,12 @@ const APPS_SCRIPT_URL   = "https://script.google.com/macros/s/AKfycbzyBmfJVVTEjp
 const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
 
 /* Somerset iShare WFS endpoint (OWS proxy scoped to the Wildlife Trust map profile).
-   The trailing WFS params are added per request in loadContext(). */
-const LNRS_WFS = "https://maps.somerset.gov.uk/iShareLive.Web/getows.ashx?mapsource=mapsources/SomersetWildlifeTrust_Live3";
+   This service only outputs GML (no GeoJSON), so loadContext() fetches GML and parses it
+   client-side via gmlToGeoJSON(). The bbox below is a generous native-grid box (EPSG:27700, so
+   axis order is unambiguous easting,northing) around Shipham — the exact 500 m clip still
+   happens client-side. */
+const LNRS_WFS  = "https://maps.somerset.gov.uk/iShareLive.Web/getows.ashx?mapsource=mapsources/SomersetWildlifeTrust_Live3";
+const LNRS_BBOX = "340000,152000,350000,162000,EPSG:27700";   // ~10 km box bracketing the parish
 
 /* Context layers (all OFF by default). Each pulls from an official open-data
    service. Two of them have a paste-in slot — copy the layer's service URL from
@@ -363,10 +367,10 @@ const CONTEXT_LAYERS = [
     style:{color:"#2EE65C",weight:3,opacity:.98,dashArray:"6 6",fill:false},
     sources:[ {geojson:"shipham-prow.geojson"} ] },
   /* Somerset Local Nature Recovery Strategy — habitat priority areas, served live from
-     Somerset Wildlife Trust's iShare (Astun) WFS. Fetched as GeoJSON, then included whole
-     if the polygon reaches within 500 m of the parish (bufferKm:0.5) — no geometry trimming,
-     exactly like the other overlays. If a sub-layer stays empty, confirm its real typeName /
-     outputFormat against the service GetCapabilities (see README) and edit it below. */
+     Somerset Wildlife Trust's iShare (Astun) WFS as GML, parsed to GeoJSON in the browser,
+     then included whole if the polygon reaches within 500 m of the parish (bufferKm:0.5) — no
+     geometry trimming, exactly like the other overlays. typeNames verified against the service
+     GetCapabilities; if one ever stays empty, re-check its <Name> there and edit below. */
   { key:"lnrs", label:"Nature recovery (LNRS)", sub:"Somerset habitat priority areas", pane:"habitatsPane",
     style:{stroke:false,fillOpacity:.55,fillColor:"#4E8E63"}, bufferKm:0.5,
     sources:[
@@ -1081,6 +1085,70 @@ function contextPopup(cfg, p){
   return `<div class="pop"><span class="tag" style="background:${cfg._c}1a;color:${cfg._c}">${esc(cfg.label)}</span>`
     + (detail?`<h3 style="font-size:.95rem">${esc(detail)}</h3>`:`<p class="by">${esc(cfg.sub)}</p>`) + `</div>`;
 }
+/* Minimal GML (2 or 3) -> GeoJSON parser for the Somerset iShare WFS, which serves no JSON.
+   Handles Point / LineString / Polygon / MultiPolygon / MultiSurface. Because WFS axis order
+   for EPSG:4326 varies by version, coordinates run through a UK range heuristic: a value in
+   ~[49,61] is latitude and ~[-12,5] longitude, so we always emit [lon,lat] whatever came in. */
+function gmlToGeoJSON(xmlText){
+  const doc = new DOMParser().parseFromString(xmlText||"", "text/xml");
+  if(!doc || !doc.documentElement) return { type:"FeatureCollection", features:[] };
+  const L = (el,name)=>Array.from(el.getElementsByTagNameNS("*", name));
+  const first = (el,name)=>{ const a=el.getElementsByTagNameNS("*", name); return a.length?a[0]:null; };
+  const pair = (a,b)=> (a>40 && a<62 && b>-12 && b<5) ? [b,a] : [a,b];   // lat,lon -> lon,lat when it looks like UK lat/lon
+  function coordsFromText(t, isCoordinates){
+    if(!t) return []; t=t.trim(); if(!t) return []; const out=[];
+    if(isCoordinates){ t.split(/\s+/).forEach(tok=>{ const p=tok.split(","); if(p.length>=2) out.push(pair(+p[0],+p[1])); }); }
+    else { const n=t.split(/\s+/).map(Number); for(let i=0;i+1<n.length;i+=2) out.push(pair(n[i],n[i+1])); }
+    return out;
+  }
+  function ringCoords(el){
+    const c=first(el,"coordinates"); if(c) return coordsFromText(c.textContent,true);
+    const pl=first(el,"posList");    if(pl) return coordsFromText(pl.textContent,false);
+    const ps=L(el,"pos");            if(ps.length) return ps.map(p=>coordsFromText(p.textContent,false)[0]).filter(Boolean);
+    return [];
+  }
+  function polygonCoords(polyEl){
+    const rings=[];
+    const outer=first(polyEl,"outerBoundaryIs")||first(polyEl,"exterior");
+    if(outer){ const lr=first(outer,"LinearRing"); if(lr){ const r=ringCoords(lr); if(r.length) rings.push(r); } }
+    L(polyEl,"innerBoundaryIs").concat(L(polyEl,"interior")).forEach(inner=>{
+      const lr=first(inner,"LinearRing"); if(lr){ const r=ringCoords(lr); if(r.length) rings.push(r); } });
+    return rings;
+  }
+  function geomOf(container){
+    const isMulti = L(container,"MultiPolygon").length || L(container,"MultiSurface").length;
+    const polys = L(container,"Polygon");
+    const pt=first(container,"Point"), line=first(container,"LineString");
+    if(isMulti){ const ps=polys.map(polygonCoords).filter(r=>r.length); if(ps.length) return {type:"MultiPolygon",coordinates:ps}; }
+    if(polys.length===1){ const r=polygonCoords(polys[0]); if(r.length) return {type:"Polygon",coordinates:r}; }
+    if(polys.length>1){ const ps=polys.map(polygonCoords).filter(r=>r.length); if(ps.length) return {type:"MultiPolygon",coordinates:ps}; }
+    if(pt){ const c=ringCoords(pt); if(c.length) return {type:"Point",coordinates:c[0]}; }
+    if(line){ const c=ringCoords(line); if(c.length) return {type:"LineString",coordinates:c}; }
+    return null;
+  }
+  const featureEls=[];
+  const members=L(doc.documentElement,"featureMember");
+  members.forEach(m=>{ const el=Array.from(m.childNodes).find(n=>n.nodeType===1); if(el) featureEls.push(el); });
+  if(!members.length){ L(doc.documentElement,"featureMembers").forEach(ms=>{
+    Array.from(ms.childNodes).forEach(n=>{ if(n.nodeType===1) featureEls.push(n); }); }); }
+  const feats=[];
+  featureEls.forEach(fEl=>{
+    let geom=null, geomChild=null;
+    Array.from(fEl.childNodes).forEach(ch=>{ if(ch.nodeType!==1||geom) return; const g=geomOf(ch); if(g){ geom=g; geomChild=ch; } });
+    if(!geom) geom=geomOf(fEl);
+    if(!geom) return;
+    const props={};
+    Array.from(fEl.childNodes).forEach(ch=>{
+      if(ch.nodeType!==1||ch===geomChild) return;
+      const ln=ch.localName||ch.nodeName.replace(/^.*:/,"");
+      if(ln==="boundedBy"||ln==="msGeometry") return;
+      if(ch.getElementsByTagNameNS("*","*").length) return;   // skip nested wrappers (e.g. geometry)
+      props[ln]=ch.textContent;
+    });
+    feats.push({ type:"Feature", geometry:geom, properties:props });
+  });
+  return { type:"FeatureCollection", features:feats };
+}
 async function loadContext(cfg){
   if(cfg.wms) return;                               // raster overlay — nothing to fetch/clip
   if(cfg._loaded || cfg._loading) return; cfg._loading=true;
@@ -1115,17 +1183,17 @@ async function loadContext(cfg){
       }
       if(src.wfs){
         const w=src.wfs;
-        // iShare/MapServer WFS. version 1.0.0 keeps the bbox in lon/lat (W,S,E,N) order — matching
-        // how the rest of the app builds envelopes — and GeoJSON output is always lon/lat, so it
-        // drops straight into Leaflet/turf. If a sub-layer stays empty, check the real typeName /
-        // outputFormat in the service GetCapabilities and adjust it in CONTEXT_LAYERS (see README).
+        // iShare/MapServer WFS outputs GML only, so we fetch GML and parse it to GeoJSON here.
+        // Request in native EPSG:27700 (bbox axis order unambiguous) and ask for WGS84 output;
+        // gmlToGeoJSON()'s coordinate heuristic tolerates whichever axis order comes back.
         const u=w.url+(w.url.indexOf("?")>-1?"&":"?")
-          +`service=WFS&version=1.0.0&request=GetFeature`
-          +`&typeName=${encodeURIComponent(w.typeName)}`
-          +`&outputFormat=${encodeURIComponent(w.outputFormat||"geojson")}`
-          +`&srsName=EPSG:4326&bbox=${env}`;
-        const r=await fetch(u); if(!r.ok) continue; const j=await r.json();
-        (j.features||[]).forEach(f=>{ const c=include(f); if(!c) return;
+          +`service=WFS&version=1.1.0&request=GetFeature`
+          +`&typename=${encodeURIComponent(w.typeName)}`
+          +`&srsname=urn:ogc:def:crs:EPSG::4326`
+          +`&bbox=${w.bbox||LNRS_BBOX}`;
+        const r=await fetch(u); if(!r.ok) continue;
+        const gj=gmlToGeoJSON(await r.text());
+        (gj.features||[]).forEach(f=>{ const c=include(f); if(!c) return;
           if(src.fill){ (c.properties=c.properties||{}).__fill=src.fill; }
           cfg.layer.addData(c);
         }); any=true; continue;
