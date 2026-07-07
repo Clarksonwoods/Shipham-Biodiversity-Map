@@ -351,6 +351,8 @@ const SHIPHAM = { lat:51.3138, lng:-2.7987, zoom:14 };
    happens client-side. */
 const LNRS_WFS  = "https://maps.somerset.gov.uk/iShareLive.Web/getows.ashx?mapsource=mapsources/SomersetWildlifeTrust_Live3";
 const LNRS_BBOX = "340000,152000,350000,162000,EPSG:27700";   // ~10 km box bracketing the parish
+/* The original Somerset LNRS "Local Habitat Map" (Astun iShare Spotlight app) this layer is drawn from. */
+const LNRS_MAP_URL = "https://ol-ishare.services.astuntechnology.com/v1/apps/spotlight/map.html?v=1&ishareurl=https%3A%2F%2Fmaps.somerset.gov.uk%2FiShareLive.Web%2F&navigation=true&gazetteer=true&infopopup=true&layerswitcher=true&layerswitcherLegend=dynamic&layerswitcherOpen=true&panelTitle=Somerset+LNRS+-+Local+Habitat+Map&panelDesc=Click+to+see+the+recommended+measures+for+that+location&profile=mapsources%2FSomersetWildlifeTrust_Live3&easting=345088.55&northing=157180.63&resolution=2.1166666666666667&basemap=mapsources%2Fbase_ospremium_bw&srs=EPSG%3A27700";
 
 /* Context layers (all OFF by default). Each pulls from an official open-data
    service. Two of them have a paste-in slot — copy the layer's service URL from
@@ -373,13 +375,16 @@ const CONTEXT_LAYERS = [
      GetCapabilities; if one ever stays empty, re-check its <Name> there and edit below. */
   { key:"lnrs", label:"Nature recovery (LNRS)", sub:"Somerset habitat priority areas", pane:"habitatsPane",
     style:{stroke:false,fillOpacity:.55,fillColor:"#4E8E63"}, bufferKm:0.5,
+    credit:"Somerset Local Nature Recovery Strategy · Somerset Wildlife Trust",
+    creditUrl:LNRS_MAP_URL, creditLabel:"Open the Somerset LNRS map →",
+    attribution:`Somerset LNRS &copy; <a href="${LNRS_MAP_URL.replace(/&/g,"&amp;")}" target="_blank" rel="noopener">Somerset Wildlife Trust</a>`,
     sources:[
-      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Woodland"},          fill:"#2E7D32"},  // woodland — green
-      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Grassland"},         fill:"#D4B14A"},  // grassland — gold
-      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Wetlands"},          fill:"#3DA5C4"},  // wetlands — light blue
-      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Moorland_and_Heath"},fill:"#9C4D9C"},  // heath/moor — purple
-      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Fresh_Water"},       fill:"#1E88A8"},  // fresh water — teal
-      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Coastal_and_Marine"},fill:"#C2A36B"}   // coastal — sand (inland: usually empty)
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Woodland"},          fill:"#2E7D32", cat:"Woodland"},          // green
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Grassland"},         fill:"#D4B14A", cat:"Grassland"},         // gold
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Wetlands"},          fill:"#3DA5C4", cat:"Lowland wetland"},   // light blue
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Moorland_and_Heath"},fill:"#9C4D9C", cat:"Moorland & heath"},  // purple
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Fresh_Water"},       fill:"#1E88A8", cat:"Freshwater"},        // teal
+      {wfs:{url:LNRS_WFS, typeName:"ACBI_-_Coastal_and_Marine"},fill:"#C2A36B", cat:"Coastal"}            // sand (inland: usually empty)
     ] }
 ];
 /* ================================================================= */
@@ -1081,9 +1086,12 @@ function habitatColor(name){
 function fieldVal(p, keys){ for(const k of keys){ if(p && p[k]!=null && p[k]!=="") return String(p[k]); } return ""; }
 function contextPopup(cfg, p){
   const fields=["ROW_TYPE","PROW_TYPE","ROWTYPE","path_type","RIGHTOFWAY","prow_ref","PROW_REF","Path_Name","risk_band","hab","Main_Habit","mainhabs","MAIN_HABIT","habitat","Habitat","HABITAT","IFT_IOA","Category","CATEGORY","Woodland_Type","woodland_t","Woodland_T","INSPIREID","inspireid","INSPIRE_ID"];
-  let detail=""; for(const k of fields){ if(p[k]){ detail=p[k]; break; } }
-  return `<div class="pop"><span class="tag" style="background:${cfg._c}1a;color:${cfg._c}">${esc(cfg.label)}</span>`
-    + (detail?`<h3 style="font-size:.95rem">${esc(detail)}</h3>`:`<p class="by">${esc(cfg.sub)}</p>`) + `</div>`;
+  let detail=p.__cat||""; if(!detail){ for(const k of fields){ if(p[k]){ detail=p[k]; break; } } }
+  let h=`<div class="pop"><span class="tag" style="background:${cfg._c}1a;color:${cfg._c}">${esc(cfg.label)}</span>`
+    + (detail?`<h3 style="font-size:.95rem">${esc(detail)}</h3>`:`<p class="by">${esc(cfg.sub)}</p>`);
+  if(cfg.credit) h+=`<p class="by">${esc(cfg.credit)}</p>`;
+  if(cfg.creditUrl) h+=`<a class="link" href="${esc(cfg.creditUrl)}" target="_blank" rel="noopener">${esc(cfg.creditLabel||"View source map →")}</a>`;
+  return h+`</div>`;
 }
 /* Minimal GML (2 or 3) -> GeoJSON parser for the Somerset iShare WFS, which serves no JSON.
    Handles Point / LineString / Polygon / MultiPolygon / MultiSurface. Because WFS axis order
@@ -1194,7 +1202,9 @@ async function loadContext(cfg){
         const r=await fetch(u); if(!r.ok) continue;
         const gj=gmlToGeoJSON(await r.text());
         (gj.features||[]).forEach(f=>{ const c=include(f); if(!c) return;
-          if(src.fill){ (c.properties=c.properties||{}).__fill=src.fill; }
+          c.properties=c.properties||{};
+          if(src.fill) c.properties.__fill=src.fill;
+          if(src.cat)  c.properties.__cat=src.cat;   // friendly habitat name for the popup
           cfg.layer.addData(c);
         }); any=true; continue;
       }
@@ -1227,6 +1237,7 @@ CONTEXT_LAYERS.forEach(cfg=>{
   cfg._c = cfg.colorBy ? "#4E8E63" : (cfg.style.fillColor || cfg.style.color);
   cfg.layer = L.geoJSON(null, {
     pane: cfg.pane || undefined,
+    attribution: cfg.attribution || undefined,
     style: f => { const p=f.properties||{};
       if(p.__fill) return Object.assign({}, cfg.style, { fillColor:p.__fill });
       if(cfg.colorBy) return Object.assign({}, cfg.style, { fillColor: habitatColor(fieldVal(p, cfg.colorBy)) });
